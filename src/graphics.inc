@@ -153,7 +153,7 @@ WriteASCII:
 		    ld a,(hl)	; Value to write
 		    cp $00		; compare a with $00, set z flag if they match
 		    jp z,_WriteTilesLoopEnd	; if so, it's the string end so stop writing it
-		    cp $0a		; Check for LF
+		    cp 10		; Check for LF
 		    jp z,_NewLine
 		    sub $20
             jp c,_SkipControlChar
@@ -373,7 +373,7 @@ DrawImageBytes:
 .section "Turn off screen" FREE
 TurnOffScreen:
     push af
-        ld a,%10010000  ; 28 line mode
+        ld a,%10000100  ; 28 line mode
         out ($bf),a
         ld a,$81
         out ($bf),a
@@ -486,29 +486,6 @@ IsJapanese:
 
     _IsJap:
     ld a,1
-    ret
-.ends
-
-.section "FM detection" FREE
-;==============================================================
-; FM detector
-; Returns a=1 for FM chip found, 0 otherwise
-;==============================================================
-HasFMChip:
-    ; If there's an FM chip I should be able to modify $f2
-    push bc
-        in a,($f2)      ; Get what's there
-        ld b,a
-        xor %00000001   ; Toggle bit 0
-        out ($f2),a     ; Write it out
-        in a,($f2)      ; Read it back
-        cp b
-    pop bc    
-    jp z,_NoFM
-    ld a,1
-    ret
-    _NoFM:
-    ld a,0
     ret
 .ends
 

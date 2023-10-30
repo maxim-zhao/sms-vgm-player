@@ -6,8 +6,15 @@
 .define NameTableAddress    $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define DoSplashScreen 1
-.define DoUnnecessaryDetection 0
+.define DoSplashScreen
+;.define DoUnnecessaryDetection
+.define EasterEgg
+;.define TestFile
+;.define Debug
+
+.macro NameTableAddressInHL args x, y
+  ld hl,NameTableAddress+2*(x+y*32)
+.endm
 
 ;==============================================================
 ; WLA-DX banking setup
@@ -15,19 +22,28 @@
 ; chunks in the first 32KB.
 ;==============================================================
 .memorymap
-DEFAULTSLOT 0
-SLOTSIZE $8000
-SLOT 0 $0000
-SLOTSIZE $4000
-SLOT 1 $8000
-.ENDME
-.ROMBANKMAP
-BANKSTOTAL 1
-BANKSIZE $8000
-BANKS 1
-;BANKSIZE $4000
-;BANKS 1
-.ENDRO
+defaultslot 0
+slotsize $8000
+slot 0 $0000
+slotsize $4000
+slot 1 $8000
+.endme
+
+.ifdef TestFile
+.rombankmap
+bankstotal 2
+banksize $8000
+banks 1
+banksize $4000
+banks 1
+.endro
+.else
+.rombankmap
+bankstotal 1
+banksize $8000
+banks 1
+.endro
+.endif
 
 .bank 0 slot 0
 .org $0000
@@ -35,11 +51,11 @@ BANKS 1
 ;==============================================================
 ; SDSC tag and SMS rom header
 ;==============================================================
-.sdsctag 0.45,"SMS VGM player",SDSCNotes,"Maxim"
+.sdsctag 0.93,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
 ;    123456789012345678901234567890123456789012345678901234567890123
-.db "Beta version - by whatever means necessary, this software must"
+.db "By whatever means necessary, this software must"
 .db " NOT appear on any rom tool's 'needed' list. Please note that"
 .db " only the first 32KB is the actual program, and any data after"
 .db " that is appended VGM music data.",0
@@ -49,46 +65,71 @@ SDSCNotes:
 ; Memory usage
 ;==============================================================
 .enum $c000
-VGMMemoryStart  ds 256
-ButtonState     db
-LastButtonState db
-VisBuffer       ds 64
-VisNumber       db
-IsPalConsole    db
-;.if DoUnnecessaryDetection == 1
-IsJapConsole    db
-FMChipDetected  db
-;.endif
-VBlankRoutine   dw
-VisRoutine          dw  ; Routine to calculate vis
-VisDisplayRoutine   dw  ; Routine to call in VBlank to update vis
-VisChanged      db      ; Flag to signal that the vis needs to be initialised
-SecondsChanged  db
-LoopsChanged    db
-PaletteChanged  db
-PaletteNumber   db
-RandomSR        dw  ; Random number generator shift register, needs seeding
-.ENDE
+Port3EValue                     db
+VGMMemoryStart                  ds 256
+ButtonState                     db
+LastButtonState                 db
+VisBuffer                       ds 64
+VisNumber                       db
+IsPalConsole                    db
+IsJapConsole                    db
+FMChipDetected                  db
+VBlankRoutine                   dw
+VisRoutine                      dw ; Routine to calculate vis
+VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
+VisChanged                      db ; Flag to signal that the vis needs to be initialised
+SecondsChanged                  db
+LoopsChanged                    db
+PaletteChanged                  db
+PaletteNumber                   db
+RandomSR                        dw ; Random number generator shift register, needs seeding
+GD3DisplayerBuffer              dsb 33
+.ende
 
 ;Useful defines and macros:
 .include "graphics.inc"
+
+.include "Phantasy Star decompressors.inc"
 
 .org $0000
 ;==============================================================
 ; Boot section
 ;==============================================================
 .section "!Boot section" FORCE   ; Standard stuff (for the SMS anyway)
-    di              ; disable interrupts (re-enable later)
-    im 1            ; Interrupt mode 1
-    ld sp, $dff0    ; load stack pointer to not-quite-the-end of user RAM (avoiding paging regs)
-    jp main         ; jump to main program
+  di              ; disable interrupts (re-enable later)
+  im 1            ; Interrupt mode 1
+  ld sp, $dff0    ; load stack pointer to not-quite-the-end of user RAM (avoiding paging regs)
+  jr main         ; jump to main program
+.ends
 
-    .db "Vis: "
-    InitialVisNumber:
-    .db 0
-    .db " Colour: "
-    InitialColourNumber:
-    .db 0
+;  .db "Vis: "
+;  InitialVisNumber:
+;  .db 0
+;  .db " Colour: "
+;  InitialColourNumber:
+;  .db 0
+
+.org $10
+.macro GetByte
+  rst $10
+.endm
+.section "!GetByte" force
+  ; get byte (easy)
+  ld a,(bc)
+  ; increment address (hard)
+  inc bc
+  bit 6,b
+  ret z
+  ; bc is >$cx (presuming this is the only place it is changed)
+  ; so flip to the next page
+  push af
+    ld a,($ffff)
+    inc a
+    call z,VGMStop ; give up at page $100(!)
+    ld ($ffff),a
+    ld bc,$8000
+  pop af
+  ret
 .ends
 
 .org $0038
@@ -96,35 +137,35 @@ RandomSR        dw  ; Random number generator shift register, needs seeding
 ; Interrupt handler
 ;==============================================================
 .section "!Interrupt handler" FORCE
-    in a,($bf)      ; satisfy interrupt
-    ; No checking of the value because I know I only have VBlank interrupts
-    ld hl,(VBlankRoutine)
-    call callHL
-    reti
+  in a,($bf)      ; satisfy interrupt
+  ; No checking of the value because I know I only have VBlank interrupts
+  ld hl,(VBlankRoutine)
+  call callHL
+  reti
 
 callHL:
-    jp (hl)
+  jp (hl)
 
 NoVBlank:
-    ret
+  ret
 
 VGMPlayerVBlank:
-    call CheckInput ; Read input into memory
-    call ShowTime   ; Update time display
-    call ShowLoopNumber
+  call CheckInput ; Read input into memory
+  call ShowTime   ; Update time display
+  call ShowLoopNumber
 
-    ld a,(PaletteChanged)
-    cp 1
-    call z,CyclePalette ; must do CRAM writes in VBlank
+  ld a,(PaletteChanged)
+  cp 1
+  call z,CyclePalette ; must do CRAM writes in VBlank
 
-    ld a,(VisChanged)
-    cp 1
-    call z,InitialiseVisRoutine ; If the vis has changed then I need to do the initialisation in the vblank
+  ld a,(VisChanged)
+  cp 1
+  call z,InitialiseVisRoutine ; If the vis has changed then I need to do the initialisation in the vblank
 
-    ld hl,(VisDisplayRoutine)   ; Draw vis
-    call callHL
+  ld hl,(VisDisplayRoutine)   ; Draw vis
+  call callHL
 
-    ret
+  ret
 .ends
 
 .org $0066
@@ -132,26 +173,26 @@ VGMPlayerVBlank:
 ; Pause button handler
 ;==============================================================
 .section "!NMI handler" FORCE
-    ; Debug resetter
-;    jp $0000
+  ; Debug resetter
+;  jr $0000
 
-    ; Dodgy PAL/NTSC speed switch
-    push hl
-    push de
-        call VGMGetSpeed
-        ld de,735
-        and $ff
-        sbc hl,de
-        jp z,_ChangeToPAL
-        ld hl,735
-        jp _SetSpeed
-        _ChangeToPAL:
-        ld hl,882
-        _SetSpeed:
-        call VGMSetSpeed
-    pop de
-    pop hl
-    retn
+  ; Dodgy PAL/NTSC speed switch
+  push hl
+  push de
+      call VGMGetSpeed
+      ld de,735
+      or a
+      sbc hl,de
+      jr z,_ChangeToPAL
+      ld hl,735
+      jr _SetSpeed
+      _ChangeToPAL:
+      ld hl,882
+      _SetSpeed:
+      call VGMSetSpeed
+  pop de
+  pop hl
+  retn
 .ends
 
 
@@ -159,157 +200,155 @@ VGMPlayerVBlank:
 ; Main program
 ;==============================================================
 main:
-    ld a,$02
-    ld ($ffff),a
+  ld a,$02
+  ld ($ffff),a
 
-    ; Load VDP with default values, thanks to Mike G :P
-    ; hl = address of data
-    ; b = size of data
-    ; c = port
-    ; otir = while (b>0) do {out (hl),c; b--}
-    ld hl,VdpData
-    ld b,VdpDataEnd-VdpData
-    ld c,$bf
-    otir
+  ; Load VDP with default values, thanks to Mike G :P
+  ; hl = address of data
+  ; b = size of data
+  ; c = port
+  ; otir = while (b>0) do {out (hl),c; b--}
+  ld hl,VdpData
+  ld b,VdpDataEnd-VdpData
+  ld c,$bf
+  otir
 
-    call IsPAL
-    ld (IsPalConsole),a
-.if DoUnnecessaryDetection == 1
-    call IsJapanese
-    ld (IsJapConsole),a
-    call HasFMChip
-    ld (FMChipDetected),a
+  call CheckPort3EValue
+
+  call IsPAL
+  ld (IsPalConsole),a
+.ifdef DoUnnecessaryDetection
+  call IsJapanese
+  ld (IsJapConsole),a
+  call HasFMChip
+  xor a
+  ld (FMChipDetected),a
 .endif
 
-    ; Startup screen
-.if DoSplashScreen == 1
-    call ClearVRAM
-    call DisplayVGMLogo
-    call TurnOffScreen
+  ; Startup screen
+.ifdef DoSplashScreen
+  call ClearVRAM
+  call DisplayVGMLogo
+  call TurnOffScreen
 .endif
-    call ClearVRAM
-    call NoSprites
+  call ClearVRAM
+  call NoSprites
 
-    ; Load palette
-    ld hl,PaletteData
-    ld b,(PaletteDataEnd-PaletteData)
-    ld c,0
-    call LoadPalette
+  ; Load palette
+  ld hl,PaletteData
+  ld b,(PaletteDataEnd-PaletteData)
+  ld c,0
+  call LoadPalette
 
-    ; Load tiles
-    ld hl,0         ; Load font
-    ld ix,TileData
-    ld bc,$5f+1
-    ld d,3
-    call LoadTiles
+  ; Load tiles
+  ld de,$4000     ; Load font
+  ld hl,TileData
+  call LoadTiles4BitRLENoDI
 
-    ld hl,$60       ; Load vis tiles
-    ld ix,ScaleData
-    ld bc,9
-    ld d,2
-    call LoadTiles
+  ld de,$60*32+$4000     ; Load vis tiles
+  ld hl,ScaleData
+  call LoadTiles4BitRLENoDI
 
-    .define BigNumbersOffset 105
-    ld hl,BigNumbersOffset  ; Load big numbers
-    ld ix,BigNumbers
-    ld bc,41
-    ld d,3
-    call LoadTiles
+  .define BigNumbersOffset 105
 
-    ld hl,146
-    ld ix,Pad       ; Load pad image
-    ld bc,$6d+1
-    ld d,4
-    call LoadTiles
+  ld de,32*BigNumbersOffset+$4000
+  ld hl,BigNumbers
+  call LoadTiles4BitRLENoDI
 
-    ld hl,256
-    ld ix,PianoTiles
-    ld bc,10
-    ld d,3
-    call LoadTiles
+  ld de,32*146+$4000
+  ld hl,Pad
+  call LoadTiles4BitRLENoDI
 
-    .define NumSprites 4+7
-    ld hl,$1c0-NumSprites
-    ld ix,Sprites
-    ld bc,NumSprites
-    ld d,3
-    call LoadTiles
+  ld de,32*256+$4000
+  ld hl,PianoTiles
+  call LoadTiles4BitRLENoDI
 
-    ; Initial button state values (all off)
-    ld a,$ff
-    ld (LastButtonState),a
-    ld (ButtonState),a
+  ld de,32*$1b0+$4000
+  ld hl,Sprites
+  call LoadTiles4BitRLENoDI
 
-    ; Draw text
-    ld iy,NameTableAddress
-    ld hl,TextData
-    call WriteASCII
+  ; Initial button state values (all off)
+  ld a,$ff
+  ld (LastButtonState),a
+  ld (ButtonState),a
 
-    ; Draw pad image
-    ld bc,$0c0b     ; 12x11
-    ld ix,PadData
-    ld iy,NameTableAddress+2*20
-    ld h,0
-    call DrawImageBytes
+  ; Draw text
+  ld iy,NameTableAddress
+  ld hl,TextData
+  call WriteASCII
 
-    ; Put something in the shift register
-    ld hl,$0210 ; the current time (am)
-                ; a better seed would be... better. eg. a counter
-    ld (RandomSR),hl
+  ; Draw pad image
+  ld bc,$0c0b     ; 12x11
+  ld ix,PadData
+  ld iy,NameTableAddress+2*20
+  ld h,0
+  call DrawImageBytes
 
-    ; Load settings, initialise stuff
-    call LoadSettings
-    call CyclePalette
-    call InitialiseVis
+  ; Put something in the shift register
+  ld hl,$0210 ; the current time (am)
+              ; a better seed would be... better. eg. a counter
+  ld (RandomSR),hl
 
-    ; Reset VGM player
-    call VGMInitialise
+  ; Load settings, initialise stuff
+  call LoadSettings
+  call CyclePalette
+  call InitialiseVis
 
-.if DoUnnecessaryDetection == 1
-    ; Debug: show detected information
-    ld hl,NameTableAddress+2*(32*27+4)
-    call VRAMToHL
-    ld a,(IsJapConsole)
-    call WriteNumber
-    ld hl,NameTableAddress+2*(32*27+11)
-    call VRAMToHL
-    ld a,(IsPalConsole)
-    call WriteNumber
-    ld hl,NameTableAddress+2*(32*27+17)
-    call VRAMToHL
-    ld a,(FMChipDetected)
-    call WriteNumber
+  ; Reset VGM player
+  call VGMInitialise
+
+.ifdef Debug
+  ; Debug: show detected information
+  NameTableAddressInHL 0, 24
+  call VRAMToHL
+  ld a,(IsJapConsole)
+  call WriteNumber
+  NameTableAddressInHL 0, 25
+  call VRAMToHL
+  ld a,(IsPalConsole)
+  call WriteNumber
+  NameTableAddressInHL 0, 26
+  call VRAMToHL
+  ld a,(FMChipDetected)
+  call WriteNumber
 .endif
 
-    ; Set VBlank routine
-    ld hl,VGMPlayerVBlank
-    ld (VBlankRoutine),hl
+  ; Set VBlank routine
+  ld hl,VGMPlayerVBlank
+  ld (VBlankRoutine),hl
 
-    ; Fake a VBlank to initialise various stuff
-    call VGMPlayerVBlank
+  ; Fake a VBlank to initialise various stuff
+  call VGMPlayerVBlank
 
-    ; Turn screen on
-    ld a,%11110010
-;         ||||| |`- Zoomed sprites -> 16x16 pixels
-;         ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
-;         ||||`---- 30 row/240 line mode
-;         |||`----- 28 row/224 line mode
-;         ||`------ VBlank interrupts
-;         |`------- Enable display
-;         `-------- Must be set (VRAM size bit)
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
+  ; Turn screen on
+  ld a,%11100010
+;       ||||| |`- Zoomed sprites -> 16x16 pixels
+;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
+;       ||||`---- 30 row/240 line mode
+;       |||`----- 28 row/224 line mode
+;       ||`------ VBlank interrupts
+;       |`------- Enable display
+;       `-------- Must be set (VRAM size bit)
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
 
-    InfiniteLoop:   ; to stop the program
-        call VGMUpdate      ; Write sound data
-        call ProcessInput   ; Process input from the last VBlank
-        ld hl,(VisRoutine)  ; Update vis data
-        call callHL
+  /* Auto-play is weird... it plays super-fast
+  call VGMStop
+  call VGMUpdate
+  call VGMPlayPause
+  call VGMUpdate
+  */
 
-        ei
-        halt
-        jp InfiniteLoop
+InfiniteLoop:   ; to stop the program
+  ei
+  halt
+  call VGMUpdate      ; Write sound data
+  call ProcessInput   ; Process input from the last VBlank
+  ld hl,(VisRoutine)  ; Update vis data
+  call callHL
+
+  jr InfiniteLoop
 
 ;==============================================================
 ; VGM offset to SMS offset convertor
@@ -322,468 +361,434 @@ main:
 ;==============================================================
 .section "VGM to SMS offset" SEMIFREE
 VGMOffsetToPageAndOffset:
-    push ix
-    push bc
-    push de
-        ; Remember the offset value in c becasue I need to use a
-        ld c,a
+  push ix
+  push bc
+  push de
+    ; Remember the offset value in c because I need to use a
+    ld c,a
 
-        ; Page in the first page, remembering the current page on the stack
-        ld a,($ffff)
-        push af
-        ld a,$02
-        ld ($ffff),a
+    ; Page in the first page, remembering the current page on the stack
+    ld a,($ffff)
+    push af
+      ld a,$02
+      ld ($ffff),a
 
-        ; offset of dword in .sms -> ix
-        ld b,$80
-        push bc
-        pop ix
+      ; offset of dword in .sms -> ix
+      ld b,$80
+      push bc
+      pop ix
 
-        ; Value stored there -> dehl
-        ld l,(ix+0)
-        ld h,(ix+1)
-        ld e,(ix+2)
-        ld d,(ix+3)
+      ; Value stored there -> dehl
+      ld l,(ix+0)
+      ld h,(ix+1)
+      ld e,(ix+2)
+      ld d,(ix+3)
 
-        ; See if it's zero
-        ; If it is, h|l|d|e=0
-        ld a,h
-        or l
-        or d
-        or e
-        jp nz,_NonZero
-        ld c,$00
-        jp _end
+      ; See if it's zero
+      ; If it is, h|l|d|e=0
+      ld a,h
+      or l
+      or d
+      or e
+      jr nz,_NonZero
+      ld c,$00
+      jr _end
 
-        _NonZero:
-        ; Add offset, ie. dehl + c -> dehl
-        ld b,$00
-        and $ff     ; reset carry
-        adc hl,bc
-        ld bc,$0000 ; I've finished with c now
-        push hl
-            ld h,d
-            ld l,e
-            adc hl,bc
-            ld d,h
-            ld e,l
-        pop hl
+_NonZero:
+      ; Add offset, ie. dehl + c -> dehl
+      ld b,$00
+      add hl,bc
+      jr nc,+
+      inc de
++:
+      ; Figure out which page it's on and store that in c now
+      ; ddddddddeeeeeeeehhhhhhhhllllllll
+      ; Page -----^^^^^^^^
+      ld a,e
+      ld b,h
+      sla b
+      rla
+      sla b
+      rla
+      add a,2
+      ld c,a
 
-        ; Figure out which page it's on and store that in c now
-        ; ddddddddeeeeeeeehhhhhhhhllllllll
-        ; Page -----^^^^^^^^
-        ld b,e
-        sla b
-        sla b
-        ld a,h
-        rlc a
-        rlc a
-        and %00000011
-        or b
-        add a,2
-        ld c,a
+      ; And then get the offset by modding by $4000 and adding $8000
+      ; Do this by hl = (hl & 0x3fff) | 0x8000
+      ; Quite neat in asm :P
+      res 6,h
+      set 7,h
 
-        ; And then get the offset by modding by $4000 and adding $8000
-        ; Do this by hl = (hl & 0x3fff) | 0x8000
-        ; Quite neat in asm :P
-        res 6,h
-        set 7,h
+_end:
+    ; Restore original page
+    pop af
+    ld ($ffff),a
 
-        _end:
-        ; Restore original page
-        pop af
-        ld ($ffff),a
-
-        ; Output a=page number
-        ld a,c
-    pop de
-    pop bc
-    pop ix
-    ret
+    ; Output a=page number
+    ld a,c
+  pop de
+  pop bc
+  pop ix
+  ret
 .ends
 
 .section "Draw GD3" SEMIFREE
 MoveHLForwardByA:
-    ; Adds A to HL
-    ; If it goes over $c000, it handles the paging
-    push bc
-        ld b,$00
-        ld c,a
-        add hl,bc
-        ld a,h
-        and $f0 ; just 1st digit
-        cp $c0  ; Is it c?
-        jr nz,_OK
-        ; Need to decrement by $4000
-        res 6,h
-        ; and page in the next page
-        ld a,($ffff)
-        inc a
-        ld ($ffff),a
-        _OK:
-        ld a,c
-    pop bc
-    ret
+  ; Adds A to HL
+  ; If it goes over $c000, it handles the paging
+  add a,l
+  jr nc,+
+  inc h
++:ld l,a
+  ; check for >$c000
+  ld a,h
+  cp $c0
+  ret nz
+
+  ; Need to decrement by $4000
+  res 6,h
+  ; and page in the next page
+  ld a,($ffff)
+  inc a
+  ld ($ffff),a
+  ret
 
 MoveHLForward:
-    ; Adds 1 to HL
-    ; If it goes to $c000, it handles the paging
-    inc hl
-    push af
-        ld a,h
-        and $f0 ; just 1st digit
-        cp $c0  ; Is it c?
-        jr nz,_OK2
-        ; Need to decrement by $4000
-        res 6,h
-        ; and page in the next page
-        ld a,($ffff)
-        inc a
-        ld ($ffff),a
-        _OK2:
-    pop af
-    ret
+  ; Adds 1 to HL
+  ; If it goes to $c000, it handles the paging
+  inc hl
+  push af
+    ld a,h
+    and $f0 ; just 1st digit
+    cp $c0  ; Is it c?
+    jr nz,_OK2
+    ; Need to decrement by $4000
+    res 6,h
+    ; and page in the next page
+    ld a,($ffff)
+    inc a
+    ld ($ffff),a
+    _OK2:
+  pop af
+  ret
 
 ;==============================================================
 ; GD3 displayer
 ; Uses 34 bytes of RAM to buffer the text
 ;==============================================================
-.define GD3DisplayerBuffer $c100
 DrawGD3Tag:
-    push hl
-    push de
-    push bc
-    push af
-        ; Page in first page
-        ld a,$02
-        ld ($ffff),a
-        ld a,$14
-        call VGMOffsetToPageAndOffset   ; a = page or 0, hl = offset
+  push hl
+  push de
+  push bc
+  push af
+    ; Page in first page
+    ld a,$02
+    ld ($ffff),a
+    ld a,$14 ; offset of GD3 tag location
+    call VGMOffsetToPageAndOffset   ; a = page or 0, hl = offset
 
-        ; See if it's come out as zero = no tag
-        cp $00
-        jr z,_NoGD3
+    ; See if it's come out as zero = no tag
+    or a
+    jr z,_NoGD3
 
-        ; Page it in
-        ld ($ffff),a
+    ; Page it in
+    ld ($ffff),a
 
-        ; Move to first string
-        ld a,12
-        call MoveHLForwardByA
+    ; Move to first string
+    ld a,12
+    call MoveHLForwardByA
 
-        ld a,2
-        call _DrawGD3String ; Title
-        call _SkipGD3String
-        call _DrawGD3String ; Game
-        call _SkipGD3String
-        call _DrawGD3String ; System
-        call _SkipGD3String
-        call _DrawGD3String ; Author
+    ld a,2
+    call _DrawGD3String ; Title
+    call _SkipGD3String
+    call _DrawGD3String ; Game
+    call _SkipGD3String
+    call _DrawGD3String ; System
+    call _SkipGD3String
+    call _DrawGD3String ; Author
 
-        jp _end
+    jr _end
 
-        _NoGD3:
-        ; Say so
-        ld hl,NoTagString
-        call WriteASCII
+    _NoGD3:
+    ; Say so
+    ld hl,NoTagString
+    call WriteASCII
 
-        _end:
-    pop af
-    pop bc
-    pop de
-    pop hl
-    ret
+    _end:
+  pop af
+  pop bc
+  pop de
+  pop hl
+  ret
 NoTagString:
 .db 32,10,"         - No GD3 tag -",10,32,10,32,10,0
 
 _SkipGD3String:
 ; Move hl forward until after the next zero word
-    push bc
-    push af
-        _SkipLoop:
-        ld c,(hl)
-        call MoveHLForward
-        ld b,(hl)
-        call MoveHLForward
+  push bc
+  push af
+-:  ld c,(hl)
+    call MoveHLForward
+    ld b,(hl)
+    call MoveHLForward
 
-        ld a,b
-        or c
-        jp nz,_SkipLoop
-    pop af
-    pop bc
-    ret
+    ld a,b
+    or c
+    jr nz,-
+  pop af
+  pop bc
+  ret
 
 _DrawGD3String:
 ; Copy string from hl to RAM, (badly) converting from Unicode as I go
 ; Copy a maximum of MaxLength chars, terminate with \n\0
 ; Then draw to the screen
-.define MaxLength 32                ; GD3 line length
-    push af
-    push de
-    push bc
-        ld de,GD3DisplayerBuffer    ; Where to store ASCII
-        ld a,MaxLength
-        _Loop:
-            ; Get value into bc
-            ld c,(hl)
-            call MoveHLForward
-            ld b,(hl)
-            call MoveHLForward
-            push hl
-                ld h,b  ; Put it in hl
-                ld l,c
-                ; See if value is acceptable
-                ld bc,$0000
-                and $ff
-                sbc hl,bc   ; If it's zero, it's the end
-                jp z,_LoopEnd
-                ld bc,128
-                sbc hl,bc   ; If it's outside 7-bit ASCII, write a question mark
-                jp c,_Acceptable
-                    ; Not acceptable:
-                    ld l,$bf    ; = '?'
-                _Acceptable:
-                push af
-                    ld bc,128    ; Put it back to the right value
-                    add hl,bc
-                    ld a,l
-                    ; Finally copy it to RAM
-                    ld h,d
-                    ld l,e
-                    ld (hl),a
-                    inc de
-                pop af
-                ; Fall through to next char
-            _NextChar:
-                dec a   ; decrement counter
-                jp nz,_LoopAgain
-                ; If it gets to zero:
-                pop hl
-                    call z,_SkipGD3String   ; go to the end of the string
-                push hl
-                jp z,_LoopEnd           ; finish
-            _LoopAgain:
-            pop hl
-            jp _Loop
-            _LoopEnd:
-                ld h,d
-                ld l,e
-                cp 32           ; If first char is zero
-                jr nz,_NotZero
-                    ld (hl),' ' ; put a space so it'll work properly
-                    inc hl
-                _NotZero:
-                ld (hl),$0a
-                inc hl
-                ld (hl),$00
-                ld hl,GD3DisplayerBuffer
-                call WriteASCII
-            pop hl
-    pop bc
-    pop de
-    pop af
-    ret
+.define MaxLength 31                ; GD3 line length
+  push af
+  push de
+  push bc
+    ld de,GD3DisplayerBuffer    ; Where to store ASCII
+    ld a,MaxLength
+_Loop:
+    ; Get value into bc
+    ld c,(hl)
+    call MoveHLForward
+    ld b,(hl)
+    call MoveHLForward
+    push hl
+      ld h,a ; backup char counter
+      ; See if value is acceptable
+      ld a,b
+      or a ; high values are bad
+      jr nz,_Unacceptable
+      ld a,c
+      or a
+      jr z,_LoopEnd ; zero means end of string
+      bit 7,a ; we only do 7-bit ASCII
+      jr z,_Acceptable
+_Unacceptable:
+      ld a,'?';$bf    ; = '?'
+_Acceptable:
+      ld (de),a
+      ld a,h ; restore counter
+    pop hl
+    inc de
+     ; Fall through to next char
+_NextChar:
+    dec a   ; decrement counter
+    jr nz,_Loop
+    ; If it gets to zero:
+    call _SkipGD3String   ; go to the end of the string
+    push hl
+    ; fall through to finish
+
+_LoopEnd:
+      ld h,d
+      ld l,e
+      cp 32           ; If no chars were written
+      jr nz,+
+      ld (hl),' ' ; put a space so it'll work properly
+      inc hl
++:    ld (hl),$0a
+      inc hl
+      ld (hl),$00
+      ld hl,GD3DisplayerBuffer
+      call WriteASCII
+    pop hl
+  pop bc
+  pop de
+  pop af
+  ret
 .ends
 
 ;==============================================================
 ; Time displayer
 ;==============================================================
 ShowTime:
-.define TimeDisplayPosition NameTableAddress+2*(32*6+2)
-    push af
-        ld a,(SecondsChanged)
-        cp 0
-        jp z,+
+  push af
+    ld a,(SecondsChanged)
+    or a
+    jr z,+
     push bc
     push de
     push hl
-        ; get digits
-        ld de,(VGMTimeMins)     ; d = sec  e = min
-        ; Set start name table address
-        ld hl,TimeDisplayPosition
-        ; Output digit(s)
-        ld b,e
-        call DrawByte
-        ld bc,6     ; \ 5 cycles compared to
-        add hl,bc   ; / 6 for 6x inc hl
-        ld b,d
-        call DrawByte
-        ld a,0
-        ld (SecondsChanged),a
+      ; get digits
+      ld de,(VGMTimeMins)     ; d = sec  e = min
+      ; Set start name table address
+      NameTableAddressInHL 2, 6
+      ; Output digit(s)
+      ld b,e
+      call DrawByte
+      ld bc,6
+      add hl,bc
+      ld b,d
+      call DrawByte
+      xor a
+      ld (SecondsChanged),a
     pop hl
     pop de
     pop bc
-    +:
-    pop af
-    ret
++:pop af
+  ret
 
 ;==============================================================
 ; Loop count displayer
 ;==============================================================
 ShowLoopNumber:
-.define LoopNumberPosition NameTableAddress+2*(32*6+13)
-    push af
-        ld a,(LoopsChanged)
-        cp 0
-        jp z,+
+  push af
+    ld a,(LoopsChanged)
+    or a
+    jr z,+
     push bc
     push hl
-        ld a,(VGMLoopsPlayed)
-        ld b,a
-        ld hl,LoopNumberPosition
-        call DrawByte
-        ld a,0
-        ld (LoopsChanged),a
+      ld a,(VGMLoopsPlayed)
+      ld b,a
+      NameTableAddressInHL 13, 6
+      call DrawByte
+      xor a
+      ld (LoopsChanged),a
     pop hl
     pop bc
-    +:
-    pop af
-    ret
++:pop af
+  ret
 
 ;==============================================================
 ; Write 2-digit BCD number in b using large numbers,
 ; at screen position hl (which is modified)
 ;==============================================================
 DrawByte:
-    push af
-        ld a,b
-        srl a
-        srl a
-        srl a
-        srl a
-        call DrawLargeDigit
-        ; move to next space
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        ld a,b
-        and $0f
-        call DrawLargeDigit
-    pop af
-    ret
+  push af
+    ld a,b
+    srl a
+    srl a
+    srl a
+    srl a
+    call DrawLargeDigit
+    ; move to next space
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    ld a,b
+    and $0f
+    call DrawLargeDigit
+  pop af
+  ret
 
 ;==============================================================
 ; Write lower BCD digit in a using large numbers,
 ; at screen position hl
 ;==============================================================
 DrawLargeDigit:
-    call VRAMToHL
+  call VRAMToHL
+  push bc
+  push hl
+    sla a ; multiply by 2
+    ld c,a
+    add a,BigNumbersOffset
+    out ($be),a
+    xor a
+    out ($be),a
+    ld a,c
+    add a,BigNumbersOffset+1
+    out ($be),a
+    xor a
+    out ($be),a
+    ld a,c
+
     push bc
-        ld c,a
-        sla c   ; multiply by 2
-    push af
-        ld a,c
-        add a,BigNumbersOffset
-        out ($BE),a
-        ld a,$00
-        out ($BE),a
-        ld a,c
-        add a,BigNumbersOffset+1
-        out ($BE),a
-        ld a,$00
-        out ($BE),a
-        push de
-            ld de,64
-            add hl,de
-        pop de
-        call VRAMToHL
-        ld a,c
-        add a,BigNumbersOffset+20
-        out ($BE),a
-        ld a,$00
-        out ($BE),a
-        ld a,c
-        add a,BigNumbersOffset+21
-        out ($BE),a
-        ld a,$00
-        out ($BE),a
-        push de
-            ld de,64
-            sbc hl,de
-        pop de
-    pop af
+      ld bc,64
+      add hl,bc
+      call VRAMToHL
     pop bc
-    ret
+
+    add a,BigNumbersOffset+20
+    out ($be),a
+    xor a
+    out ($be),a
+    ld a,c
+    add a,BigNumbersOffset+21
+    out ($be),a
+    xor a
+    out ($be),a
+  pop hl
+  pop bc
+  ret
 
 CheckInput: ; VBlank routine, just read it into memory
-    in a,($dc)
-    ld (ButtonState),a
-    ret
+  in a,($dc)
+  ld (ButtonState),a
+  ret
 
 ProcessInput:   ; Outside of VBlank, process what was read above
-    push hl
-    push af
-    push bc
-        ld a,(LastButtonState)  ; get last value
-        ld b,a
-        ld a,(ButtonState)      ; get current value
-        cp b                    ; compare the two
-        jp z,_Finish            ; and don't do anything if it hasn't changed
-        ld (LastButtonState),a
+  push hl
+  push af
+  push bc
+    ld a,(LastButtonState)  ; get last value
+    ld b,a
+    ld a,(ButtonState)      ; get current value
+    cp b                    ; compare the two
+    jr z,_Finish            ; and don't do anything if it hasn't changed
+    ld (LastButtonState),a
 
-        ; See which bits are unset = pressed
-        bit 0,a         ; Up
-        call z,NextVis
-        bit 1,a         ; Down
-        call z,VGMStop
-/*
-        bit 2,a         ; Left
-        call z,_Left
-*/
-        bit 3,a         ; Right
-        jp nz,+
-        ld hl,PaletteChanged
-        ld (hl),1
-        +:
+    ; See which bits are unset = pressed
+    bit 0,a         ; Up
+    call z,NextVis
+    bit 1,a         ; Down
+    call z,VGMStop
+;    bit 2,a         ; Left
+;    call z,_Left
+    bit 3,a         ; Right
+    jr nz,+
+    ld hl,PaletteChanged
+    ld (hl),1
++:
+    bit 4,a         ; Button 1
+    call z,VGMPlayPause
 
-        bit 4,a         ; Button 1
-        call z,VGMPlayPause
+    xor b       ; XOR a with the last value to get a 1 for each button that has changed, for hold-down buttons
+    bit 5,a
+    call nz,VGMFastForward  ; Button 2
 
-        ld c,a      ; backup value
-        xor b       ; XOR a with the last value to get a 1 for each button that has changed, for hold-down buttons
-        bit 5,a
-        call nz,VGMFastForward  ; Button 2
-
-        _Finish:
-    pop bc
-    pop af
-    pop hl
-    ret
+    _Finish:
+  pop bc
+  pop af
+  pop hl
+  ret
 
 CyclePalette:
-    ; increment palette number
-    ld a,(PaletteNumber)
-    inc a
-    ; Loop
-    cp NumPalettes
-    jp nz,+
-    ld a,0
-  +:ld (PaletteNumber),a
-    ; Load palette
-    ld hl,Palettes
-    ; multiply a by 3 and add it to hl
-    ld b,0
-    ld c,a
-    add a,a
-    add a,c
-    ld c,a
-    add hl,bc
+  ; increment palette number
+  ld a,(PaletteNumber)
+  inc a
+  ; Loop
+  cp NumPalettes
+  jr nz,+
+  xor a
++:ld (PaletteNumber),a
+  ; Load palette
+  ld hl,Palettes
+  ; multiply a by 3 and add it to hl
+  ld b,0
+  ld c,a
+  add a,a
+  add a,c
+  ld c,a
+  add hl,bc
 
-    ld b,3      ; main palette
-    ld c,4
-    call LoadPalette
-    ld b,1      ; border colour
-    ld c,31
-    call LoadPalette
+  ld b,3      ; main palette
+  ld c,4
+  call LoadPalette
+  ld b,1      ; border colour
+  ld c,31
+  call LoadPalette
 
-    ; reset flag
-    ld a,0
-    ld (PaletteChanged),a
+  ; reset flag
+  xor a
+  ld (PaletteChanged),a
 
-    call SaveSettings
+  call SaveSettings
 
-    ret
+  ret
 
 ;==============================================================
 ; VGM routines
@@ -791,7 +796,7 @@ CyclePalette:
 
 .section "VGM routines" SEMIFREE
 ; VGM routines memory mapping:
-.ENUM VGMMemoryStart
+.enum VGMMemoryStart
 VGMCounterLocation      dw      ; 00-01 VGM data pointer
 VGMWaitTotal            dw      ; 02-03 Wait length total
 VGMFrameLength          dw      ; 04-05 Amount to wait per frame (allows fast-forwarding :P)
@@ -811,7 +816,9 @@ VGMYM2413FNums          ds 12   ; 1f-1a 6 x word
 VGMYM2413Blocks         ds 6    ; 1b-20 6 x byte
 VGMYM2413Keys           ds 6    ; 21-26 6 x byte - byte is whole byte for reg 0x2n to make muting possible
 VGMPSGNoiseIsPeriodic   db      ; 27    Byte flag, if set then noise is periodic/tone2
-.ENDE
+VGMStartPage            db      ; 28    Start point page
+VGMStartOffset          dw      ; 29-2a Start point offset when paged in
+.ende
 
 ; Numbers for VGMPlayerState
 .define VGMPlaying      1
@@ -822,350 +829,360 @@ VGMPSGNoiseIsPeriodic   db      ; 27    Byte flag, if set then noise is periodic
 ; Integer divides HLBC by DE, returns result in BC and remainder in HL
 ; Found on Usenet
 Divide16:
-    exx
-    ld b,16
-    exx
-    xor a
-    scf
-    jr Di2
-Di1:
-    or a
-    sbc hl,de
-    sbc a,0
-    jr nc,Di2
-    ccf
-    adc hl,de
-    adc a,0
-    scf
-Di2:
-    ccf
-    rl c
-    rl b
-    adc hl,hl
-    adc a,0
-    exx
-    dec b
-    exx
-    jr nz,Di1
-    sbc hl,de
-    sbc a,0
-    jr nc,Di3
-    add hl,de
-    scf
-Di3:
-    ccf
-    rl c
-    rl b
-    ret
-
+  exx
+  ld b,16
+  exx
+  xor a
+  scf
+  jr +
+-:or a
+  sbc hl,de
+  sbc a,0
+  jr nc,+
+  ccf
+  adc hl,de
+  adc a,0
+  scf
++:ccf
+  rl c
+  rl b
+  adc hl,hl
+  adc a,0
+  exx
+  dec b
+  exx
+  jr nz,-
+  sbc hl,de
+  sbc a,0
+  jr nc,+
+  add hl,de
+  scf
++:ccf
+  rl c
+  rl b
+  ret
+  
 IsVGMFileAtOffset:  ; pass offset in ix, uses a, sets z if file found
-    push ix
-        ld a,(ix+0) ; V
-        xor (ix+1)  ; g
-        xor (ix+2)  ; m
-        xor (ix+3)  ; <space>
-        cp $7c
-    pop ix
-    ret
+  push ix
+    ld a,(ix+0) ; V
+    rrca
+    xor (ix+1)  ; g
+    rrca
+    xor (ix+2)  ; m
+    rrca
+    xor (ix+3)  ; <space>
+    cp $85 ; should come to this
+  pop ix
+  ret
 
 ;==============================================================
 ; Initialise player/read one-time information
 ;==============================================================
 VGMInitialise:
+  push hl
+  push af
+    ; Check for VGM marker
+    ld ix,$8000
+    call IsVGMFileAtOffset
+    jp nz,NoVGMFile
+
+    ; Get lengths
+    ld h,(ix+27)    ; Total
+    ld l,(ix+26)
+    ld b,(ix+25)
+    ld c,(ix+24)
+    ld de,44100
+    call Divide16   ; hl = remainder, bc = number of seconds
+    ; round up by seeing if the remainder was >= 22050 samples
+    scf
+    ld de,22050
+    sbc hl,de
+    jr c,+
+    inc bc
++:  ld hl,0
+    ld de,60
+    call Divide16   ; hl = seconds, bc = minutes
     push hl
-    push af
-        ; Check for VGM marker - I'll xor the bytes together and see what I get. Problem: "Vgm " gives the same result as "VGM "
-        ld ix,$8000
-        call IsVGMFileAtOffset
-        jp nz,NoVGMFile
-
-        ; Get lengths
-        ld h,(ix+27)    ; Total
-        ld l,(ix+26)
-        ld b,(ix+25)
-        ld c,(ix+24)
-        ld de,44100
-        call Divide16   ; hl = remainder, bc = number of seconds
-        scf
-        ld de,22050-1
-        sbc hl,de
-        jp c,+
-        inc bc
-        +:
-        ld hl,0
-        ld de,60
-        call Divide16   ; hl = seconds, bc = minutes
-        push hl
-            ld hl,NameTableAddress+2*(32*9+10)
-            call VRAMToHL
-        pop hl
-        ld a,c
-        call Hex2BCD
-        call WriteNumber
-        ld a,$1a   ; Draw colon (faster than redefining name table address)
-        out ($be),a
-        ld a,0
-        out ($be),a
-        ld a,l
-        call Hex2BCD
-        call WriteNumber
-
-        ; Lazy cut and paste
-        ld h,(ix+35)    ; Loop
-        ld l,(ix+34)
-        ld b,(ix+33)
-        ld c,(ix+32)
-        ld de,44100
-        call Divide16   ; hl = remainder, bc = number of seconds
-        scf
-        ld de,22050-1
-        sbc hl,de
-        jp c,+
-        inc bc
-        +:
-        ld hl,0
-        ld de,60
-        call Divide16   ; hl = seconds, bc = minutes
-        push hl
-            ld hl,NameTableAddress+2*(32*10+10)
-            call VRAMToHL
-        pop hl
-        ld a,c
-        call Hex2BCD
-        call WriteNumber
-        ld a,$1a   ; Draw colon (faster than redefining name table address)
-        out ($be),a
-        ld a,0
-        out ($be),a
-        ld a,l
-        call Hex2BCD
-        call WriteNumber
-
-        ; Get loop information
-        ld a,$1c
-        call VGMOffsetToPageAndOffset   ; now a=page/0, b=offset
-        ld (VGMLoopPage),a
-        ld (VGMLoopOffset),hl
-
-        ; Draw GD3 tag
-        push iy
-            ld iy,NameTableAddress+64*19  ; GD3 location
-            call DrawGD3Tag
-        pop iy
-
-        ; Initialise playback speed
-        ld a,(IsPalConsole)
-        cp $01
-        jp z,_IsPal
-        ld hl,735
-        jp _SetSpeed
-        _IsPal:
-        ld hl,882
-        _SetSpeed:
-        ld (VGMFrameLength),hl
-
-        ; Do multiple-time initialisations
-        call _Stop
-    pop af
+      NameTableAddressInHL 10, 9
+      call VRAMToHL
     pop hl
-    ret
+    ld a,c
+    call Hex2BCD
+    call WriteNumber
+    ld a,$1a   ; Draw colon (faster than redefining name table address)
+    out ($be),a
+    xor a
+    out ($be),a
+    ld a,l
+    call Hex2BCD
+    call WriteNumber
+
+    ; Lazy cut and paste
+    ld h,(ix+35)    ; Loop
+    ld l,(ix+34)
+    ld b,(ix+33)
+    ld c,(ix+32)
+    ld de,44100
+    call Divide16   ; hl = remainder, bc = number of seconds
+    scf
+    ld de,22050-1
+    sbc hl,de
+    jr c,+
+    inc bc
+    +:
+    ld hl,0
+    ld de,60
+    call Divide16   ; hl = seconds, bc = minutes
+    push hl
+      NameTableAddressInHL 10, 10
+      call VRAMToHL
+    pop hl
+    ld a,c
+    call Hex2BCD
+    call WriteNumber
+    ld a,$1a   ; Draw colon (faster than redefining name table address)
+    out ($be),a
+    xor a
+    out ($be),a
+    ld a,l
+    call Hex2BCD
+    call WriteNumber
+
+    ; Get loop information
+    ld a,$1c
+    call VGMOffsetToPageAndOffset   ; now a=page/0, hl=offset
+    ld (VGMLoopPage),a
+    ld (VGMLoopOffset),hl
+
+    ; get VGM data location
+    ld a,$34
+    call VGMOffsetToPageAndOffset   ; now a=page/0, hl=offset
+    or a
+    jr nz,+
+    ; defaults
+    ld a,2
+    ld hl,$8040
++:  ld (VGMStartPage),a
+    ld (VGMStartOffset),hl
+
+    ; Draw GD3 tag
+    push iy
+      ld iy,NameTableAddress+(32*18+1)*2  ; GD3 location
+      call DrawGD3Tag
+    pop iy
+
+    ; Initialise playback speed
+    ld a,(IsPalConsole)
+    cp $01
+    jr z,_IsPal
+    ld hl,735
+    jr _SetSpeed
+_IsPal:
+    ld hl,882
+_SetSpeed:
+    ld (VGMFrameLength),hl
+
+    ; Do multiple-time initialisations
+    call _Stop
+  pop af
+  pop hl
+  ret
 
 ; hl contains the new frame length
 VGMSetSpeed:
-    ld (VGMFrameLength),hl
-    ret    
+  ld (VGMFrameLength),hl
+  ret
 
 ; returns speed in hl
 VGMGetSpeed:
-    ld hl,(VGMFrameLength)
-    ret
+  ld hl,(VGMFrameLength)
+  ret
 
 ; Internal playback control routines
 _Play:
-    push af
+  push af
     ld a,VGMPlaying
     ld (VGMPlayerState),a
-    pop af
-    ret
+  pop af
+  ret
 
 _Pause:
-    push af
-        ld a,VGMPaused
-        ld (VGMPlayerState),a
-    pop af
-    call MuteAllSound
-    ret
+  push af
+    ld a,VGMPaused
+    ld (VGMPlayerState),a
+  pop af
+  call MuteAllSound
+  ret
 
 _Stop:
-    push hl
-    push af
-        ld a,VGMStopped
-        ld (VGMPlayerState),a
+  push hl
+  push af
+    ld a,VGMStopped
+    ld (VGMPlayerState),a
 
-        ; Switch to first page
-        ld a,2
-        ld ($ffff),a
+    ; Switch to first page
+    ld a,(VGMStartPage)
+    ld ($ffff),a
 
-        ; Move pointer to the start of the VGM data
-        ld hl,$8040
-        ld (VGMCounterLocation),hl
+    ; Move pointer to the start of the VGM data
+    ld hl,(VGMStartOffset)
+    ld (VGMCounterLocation),hl
 
-        ; Set various stuff to initial values:
-        ld hl,$0000
-        ld a,$00
-        ld (VGMWaitTotal),hl        ; Number of samples to wait for next read
-        ld (VGMWaitTotalOverflow),a
-        ld (VGMTimeMins),a          ; Time
-        ld (VGMTimeSecs),a
-        ld (VGMTimeSamples),hl
-        ld (VGMLoopsPlayed),a       ; Number of loops
-        ld a,1
-        ld (SecondsChanged),a       ; Trigger a time display update
-        ld (LoopsChanged),a
-        
-        ld hl,$ffff                 ; Volumes -> off
-        ld (VGMPSGVolumes),hl
-        ld (VGMPSGVolumes+2),hl
+    ; Set various stuff to initial values:
+    ld hl,$0000
+    xor a
+    ld (VGMWaitTotal),hl        ; Number of samples to wait for next read
+    ld (VGMWaitTotalOverflow),a
+    ld (VGMTimeMins),a          ; Time
+    ld (VGMTimeSecs),a
+    ld (VGMTimeSamples),hl
+    ld (VGMLoopsPlayed),a       ; Number of loops
+    ld a,1
+    ld (SecondsChanged),a       ; Trigger a time display update
+    ld (LoopsChanged),a
 
-        ld hl,VGMYM2413Keys         ; Turn off keys -> stop vis showing it
-        ld a,0
-        ld c,6
-      -:ld (hl),a
-        inc hl
-        dec c
-        jp nz,-
-    pop af
-    pop hl
-    call MuteAllSound
-    ret
+    ld hl,$ffff                 ; Volumes -> off
+    ld (VGMPSGVolumes),hl
+    ld (VGMPSGVolumes+2),hl
+
+    ld hl,VGMYM2413Keys         ; Turn off keys -> stop vis showing it
+    xor a
+    ld c,6
+  -:ld (hl),a
+    inc hl
+    dec c
+    jr nz,-
+  pop af
+  pop hl
+  call MuteAllSound
+  ret
 
 _Fast:
-    push af
+  push af
     ld a,VGMFast
     ld (VGMPlayerState),a
-    pop af
-    ret
+  pop af
+  ret
+
+_MutePSG:
+.db %10011111
+.db %10111111
+.db %11011111
+.db %11111111
 
 MuteAllSound:
-    push af
-        ; PSG:
-        ld a,%10011111
-        out ($7f),a
-        ld a,%10111111
-        out ($7f),a
-        ld a,%11011111
-        out ($7f),a
-        ld a,%11111111
-        out ($7f),a
-        ; YM2413: turn off keys - reg to f0, val to f1
-        push bc
-        push hl
-            ld b,$20
-            ld c,6
-            ld hl,VGMYM2413Keys
-            -:
-            ld a,b
-            out ($f0),a
-            ld a,(hl)
-            res 4,a
-            out ($f1),a
-            inc b
-            inc hl
-            dec c
-            jp nz,-
-        pop hl
-        pop bc
-    pop af
-    ret
+  push af
+  push bc
+  push hl
+    ; PSG:
+    ld hl,_MutePSG ; where to copy from
+    ld c,$7f       ; where to output to
+    ld b,4         ; how many to output
+    otir
+
+    ; YM2413: turn off keys - reg to f0, val to f1
+    ld c,$20
+    ld b,6
+    ld hl,VGMYM2413Keys
+-:  ld a,c
+    out ($f0),a
+    ld a,(hl)
+    res 4,a
+    out ($f1),a
+    inc c
+    inc hl
+    djnz -
+  pop hl
+  pop bc
+  pop af
+  ret
 
 RestoreVolumes:
-    ; Write out volumes stored in memory
-    push hl
-    push bc
-        ld hl,VGMPSGVolumes ; where to copy from
-        ld c,$7f            ; where to output to
-        ld b,4              ; how many to output
-        otir
+  ; Write out volumes stored in memory
+  push hl
+  push bc
+    ld hl,VGMPSGVolumes ; where to copy from
+    ld c,$7f            ; where to output to
+    ld b,4              ; how many to output
+    otir
 
-        ld hl,VGMYM2413Keys
-        ld b,$20
-        ld c,6
-        -:
-        ld a,b
-        out ($f0),a
-        ld a,(hl)
-        res 4,a
-        res 5,a
-        out ($f1),a
-        inc hl
-        inc b
-        dec c
-        jp nz,-
-    pop bc
-    pop hl
-    ret
+    ld hl,VGMYM2413Keys
+    ld c,$20
+    ld b,6
+-:  ld a,c
+    out ($f0),a
+    ld a,(hl)
+    res 4,a
+    res 5,a
+    out ($f1),a
+    inc hl
+    inc c
+    djnz -
+  pop bc
+  pop hl
+  ret
 
 VGMPlayPause:
-    push af
-        ld a,(VGMPlayerState)
-        cp VGMPlaying   ; if it's playing then pause
-        call z,_Pause
-        cp VGMPaused    ; if it's paused then play
-        call z,RestoreVolumes
-        call z,_Play
-        cp VGMStopped   ; if it's stopped then play from the start
-        call z,_Play
-    pop af
-    ret
+  push af
+    ld a,(VGMPlayerState)
+    cp VGMPlaying   ; if it's playing then pause
+    call z,_Pause
+    cp VGMPaused    ; if it's paused then play
+    jr nz,+
+    call RestoreVolumes
+    call _Play
+  +:cp VGMStopped   ; if it's stopped then play from the start
+    call z,_Play
+  pop af
+  ret
 
 ; Stop playback
 VGMStop:
-    call _Stop
-    ret
+  call _Stop
+  ret
 
 ; Toggle 4x speed
 VGMFastForward:
-    push af
-        ld a,(VGMPlayerState)
-        cp VGMPlaying
-        call z,_Fast
-        cp VGMFast
-        call z,_Play
-    pop af
-    ret
+  push af
+    ld a,(VGMPlayerState)
+    cp VGMPlaying
+    call z,_Fast
+    cp VGMFast
+    call z,_Play
+  pop af
+  ret
 
 ; Move to loop location
 ; regs as in VGMUpdate
 VGMDoLoop:
-    push af
-        ld a,(VGMLoopPage)  ; page loop is on
-        cp $00              ; Is it zero? If so, that means there's no looping
-        jp z,_NoLooping
-        jp _IsLooping
+  push af
+    ld a,(VGMLoopPage)  ; page loop is on
+    or a                ; Is it zero? If so, that means there's no looping
+    jr nz,_IsLooping
 
-        _NoLooping:
-        ; so I'd better stop
-        call _Stop
-        jp _EndVGMDoLoop
+_NoLooping:
+    ; so I'd better stop
+    call _Stop
+    jr _EndVGMDoLoop
 
-        _IsLooping:
-        ld ($ffff),a            ; Page
-        ld bc,(VGMLoopOffset)   ; offset
-        ld a,(VGMLoopsPlayed)
-        inc a
-        daa
-        ld (VGMLoopsPlayed),a
-        ld (LoopsChanged),a
+_IsLooping:
+    ld ($ffff),a            ; Page
+    ld bc,(VGMLoopOffset)   ; offset
+    ld a,(VGMLoopsPlayed)
+    inc a
+    daa
+    ld (VGMLoopsPlayed),a
+    ld (LoopsChanged),a
 
-        _EndVGMDoLoop:
-    pop af
-    ret
+    _EndVGMDoLoop:
+  pop af
+  ret
 
 VGMUpdate:
-    push af     ; general use
-    push bc     ; data location - change to ix?
-    push de     ; general use
-    push hl     ; wait total
+  push af     ; general use
+  push bc     ; data location - change to ix?
+  push de     ; general use
+  push hl     ; wait total
 
     ld a,(VGMPlayerState)       ; see what state we're in
     and VGMPlaying
@@ -1174,446 +1191,544 @@ VGMUpdate:
     ld bc,(VGMCounterLocation)  ; find where I'm looking
     ld hl,(VGMWaitTotal)        ; get the current amount to wait
     jp DoINeedToWait            ; in case a wait has been left over
-    GetData:
-        ld a,(VGMPlayerState)       ; see what state we're in
-        and VGMPlaying
-        jp z,EndGetDataLoop        ; if we're not playing then exit
 
-        ; Debug display of information (location/page)
-/*        push af
-        push hl
-            ld a,b
-            ld hl,NameTableAddress+2*(32*27+24)
-            call VRAMToHL
-            call WriteNumber
-            ld a,($ffff);
-            ld hl,NameTableAddress+2*(32*27+29)
-            call VRAMToHL
-            call WriteNumber
-        pop hl
-        pop af
+GetData:
+    ld a,(VGMPlayerState)       ; see what state we're in
+    and VGMPlaying
+    jp z,EndGetDataLoop        ; if we're not playing then exit
+
+.ifdef Debug
+    ; Debug display of information (location/page)
+    push af
+    push hl
+      ld a,b
+      NameTableAddressInHL 3, 25
+      call VRAMToHL
+      call WriteNumber
+      ld a,c
+      call WriteNumber
+      ld a,($ffff);
+      NameTableAddressInHL 3, 26
+      call VRAMToHL
+      call WriteNumber
+    pop hl
+    pop af
+.endif
+/*
+    ; Paging handler:
+    ; First check to see if I've already moved to reading from RAM:
+    ld de,VGMPagingBuffer
+    push hl
+        ld h,b      ; ld hl,bc...
+        ld l,c
+        or a        ; reset carry flag
+        sbc hl,de   ; subtract value, if result is negative then it's not in RAM
+        ld a,l      ; for comparison if I am in RAM (1)
+    pop hl
+    jr c,NotInRAM
+    ; If I am in RAM then see if I'm more than 2 bytes in
+    cp 2            ; (1)
+    jr c,ReadData   ; if negative then I'm not there yet
+    ; otherwise, move back to ROM
+    push hl
+        ld de,VGMPagingBuffer-$8000+2
+        ld h,b      ; ld hl,bc...
+        ld l,c
+        or a        ; reset carry flag (hmmph! doing this a lot)
+        sbc hl,de
+        ld b,h      ; ld bc,hl...
+        ld c,l
+    pop hl
+    jr ReadData
+
+
+    NotInRAM:
+    ; If I'm too close to the end of a page (<3 bytes) the next instruction might
+    ; go over to the next page:
+    push hl
+        ld hl,$bffd ; Highest safe value
+        ld d,b      ; ld de,bc...
+        ld e,c
+        or a        ; reset carry flag
+        sbc hl,de   ; subtract value, if result is negative then it's unsafe
+    pop hl
+    jr c,DoPagingThing
+    jr ReadData
+
+    DoPagingThing:
+    ; So, I'll copy the last 2 bytes of this page, and the first 2 bytes of the
+    ; next, into RAM and continue from there:
+    ld de,($bffe)
+    ld (VGMPagingBuffer),de
+    ; Now change page:
+    ld a,($ffff)
+    inc a
+    ld ($ffff),a
+    ; Now copy the first 2 bytes to my buffer:
+    ld de,($8000)
+    ld (VGMPagingBuffer+2),de
+    ; And move the data pointer to the buffer
+    ; It's moving from $c000-n to VGMPagingBuffer+2-n
+    push hl
+        ld de,VGMPagingBuffer+2-$c000
+        ld h,b      ; ld hl,bc...
+        ld l,c
+        add hl,de
+        ld b,h      ; ld bc,hl...
+        ld c,l
+    pop hl
 */
-        ; Paging handler:
-        ; First check to see if I've already moved to reading from RAM:
-        ld de,VGMPagingBuffer
-        push hl
-            ld h,b      ; ld hl,bc...
-            ld l,c
-            and $ff     ; reset carry flag
-            sbc hl,de   ; subtract value, if result is negative then it's not in RAM
-            ld a,l      ; for comparison if I am in RAM (1)
-        pop hl
-        jp c,NotInRAM
-        ; If I am in RAM then see if I'm more than 2 bytes in
-        cp 2            ; (1)
-        jp c,ReadData   ; if negative then I'm not there yet
-        ; otherwise, move back to ROM
-        push hl
-            ld de,VGMPagingBuffer-$8000+2
-            ld h,b      ; ld hl,bc...
-            ld l,c
-            and $ff     ; reset carry flag (hmmph! doing this a lot)
-            sbc hl,de
-            ld b,h      ; ld bc,hl...
-            ld c,l
-        pop hl
-        jp ReadData
+ReadData:
+    GetByte
+.ifdef Debug
+    ; Debug display of information
+;    call WriteNumberEx
+.endif
+    cp $4f      ; GG st
+    jp z,GameGearStereo
+    cp $50      ; PSG
+    jp z,PSG
+    cp $51      ; YM2413
+    jp z,YM2413
+    cp $61      ; wait n
+    jp z,WaitNSamples
+    cp $62      ; wait 1/60
+    jp z,Wait160th
+    cp $63      ; wait 1/50
+    jp z,Wait150th
+    cp $66      ; end of file
+    jp z,EndOfFile
+    cp $67      ; data block
+    jr z,DataBlock
+    ; block ranges
+    ld d,a ; backup
+    and $f0
+    cp $70
+    jr z,WaitSmallN
+    cp $80
+    jr z,YM2612SampleWithWait
+    ; unhandled ranges
+    ld a,d
+    cp $30          ; <$30 = undefined
+    jr c,ReadData
+    cp $51          ; $30-$50 = 1 operand
+    jr c,Unhandled1Byte
+    cp $60          ; $51-$5f = 2 operands
+    jr c,Unhandled2Bytes
+    cp $a1          ; up to $a0 = undefined
+    jr c,ReadData
+    cp $c0          ; $a0-$bf = 2 operands
+    jr c,Unhandled2Bytes
+    cp $d0          ; $c0-$df = 3 operands
+    jr c,Unhandled3Bytes
+;    jr Unhandled4Bytes ; remaining is $e0-$ff = 4 operands
+; fall through
 
+Unhandled4Bytes:
+    GetByte
+Unhandled3Bytes:
+    GetByte
+Unhandled2Bytes:
+    GetByte
+Unhandled1Byte:
+    GetByte
+    jr GetData
 
-        NotInRAM:
-        ; If I'm too close to the end of a page (<3 bytes) the next instruction might
-        ; go over to the next page:
-        push hl
-            ld hl,$bffd ; Highest safe value
-            ld d,b      ; ld de,bc...
-            ld e,c
-            and $ff     ; reset carry flag
-            sbc hl,de   ; subtract value, if result is negative then it's unsafe
-        pop hl
-        jp c,DoPagingThing
-        jp ReadData
+WaitSmallN:
+    ld a,d ;restore
+    and $f
+    inc a
+    ; fall through
 
-        DoPagingThing:
-        ; So, I'll copy the last 2 bytes of this page, and the first 2 bytes of the
-        ; next, into RAM and continue from there:
-        ld de,($bffe)
-        ld (VGMPagingBuffer),de
-        ; Now change page:
-        ld a,($ffff)
-        inc a
-        ld ($ffff),a
-        ; Now copy the first 2 bytes to my buffer:
-        ld de,($8000)
-        ld (VGMPagingBuffer+2),de
-        ; And move the data pointer to the buffer
-        ; It's moving from $c000-n to VGMPagingBuffer+2-n
-        push hl
-            ld de,VGMPagingBuffer+2-$c000
-            ld h,b      ; ld hl,bc...
-            ld l,c
-            add hl,de
-            ld b,h      ; ld bc,hl...
-            ld c,l
-        pop hl
+WaitASamples:
+    ld e,a
+    ld d,0
+    jp _WaitDESamples
 
-        ReadData:
-        ld a,(bc)   ; read the VGM data
-        ; Debug display of information
-;        call WriteNumberEx
-        cp $4f      ; GG st
-        jp z,GameGearStereo
-        cp $50      ; PSG
-        jp z,PSG
-        cp $61      ; wait n
-        jp z,WaitNSamples
-        cp $62      ; wait 1/60
-        jp z,Wait160th
-        cp $63      ; wait 1/50
-        jp z,Wait150th
-        cp $66      ; End of file
-        jp z,EndOfFile
-        cp $51      ; YM2413
-        jp z,YM2413
-        and $50
-        cp $50      ; YMxxxx
-        jp z,YMxxxx
-        inc bc
-        jp ReadData  ; for invalid data
+YM2612SampleWithWait:
+    ld a,d ;restore
+    and $f
+    jr WaitASamples
 
-    GameGearStereo: ; discard
-        inc bc
-;        ld a,(bc)
-;        out ($06),a ; output stereo data :( crashes a real SMS(2)
-        inc bc
-        jp GetData
+DataBlock:
+    ; skip next byte (compatibility byte)
+    GetByte
+    ; skip next byte (block type)
+    GetByte
+    ; read in block size (32 bits)
+    push de
+    push hl
+      GetByte
+      ld e,a
+      GetByte
+      ld d,a
+      GetByte
+      ld l,a
+      GetByte
+      ld h,a
+      ; hlde = block size
+      ; we need to skip it
+      ; save bc for now
+      ld (VGMCounterLocation),bc
+      ; get de into bc so I can divide
+      ld b,d
+      ld c,e
+      ld de,$4000
+      call Divide16
+      ; now bc = number of pages to skip, hl = bytes to skip
+      ; figure out the new location
+      ld d,b
+      ld e,c
+      ld bc,(VGMCounterLocation)
+      add hl,bc ; can't overflow, bc<$c000 and hl<$4000
+      ; if the answer is >$c000 then we need to subtract $4000 and add one page
+      ld a,h
+      cp $c0
+      jr c,+
+      sub $40
+      ld h,a
+      inc de
++:    ; save the offset back to bc
+      ld b,h
+      ld c,l
+      ; page in the new page
+      ld a,($ffff)
+      add a,e
+      call c,_Stop ; bail if past the addressable range
+      ld ($ffff),a
+      ; check on d - if non-zero then we still need to bail
+      ld a,d
+      or a
+      call nz,_Stop ; bail if past the addressable range
+    pop hl
+    pop de
+    jp GetData
 
-    PSG:
-        inc bc
-        ld a,(bc)   ; get data
-        out ($7f),a ; output it
+GameGearStereo: ; discard
+    GetByte
+;    out ($06),a ; output stereo data :( crashes a real SMS(2)
+    jp GetData
 
-        ; Data analysis:
-        push bc
-            ; Is it a volume write?
-            ld b,a  ; b = backup of data written
-            and %10010000   ; volume write bitmask
-            cp  %10010000
-            ld a,b  ; restore
-            jp nz,_NotVolume
-            ; It is a volume write
-            ; Channel = bits 5 and 6
-            srl a
-            srl a
-            srl a
-            srl a
-            srl a
-            and %00000011
-            ld c,a  ; c = channel
-          +:push hl
-                ld hl,VGMPSGVolumes
-                ld e,c
-                ld d,$00
-                add hl,de
-                ld (hl),b
-            pop hl
+PSG:
+    GetByte
+    out ($7f),a ; output it
 
-            _NotVolume:
-
-            ; Restore data
-            ld a,b
-            bit 7,a         ; Is it a tone2?
-            jp z,_Tone2
-            and %10010000   ; Is it a tone1?
-            cp  %10000000
-            jp z,_Tone1
-            ld a,$ff        ; reset VGMPSGTone1stByte if it's not a tone write
-            ld (VGMPSGTone1stByte),a
-
-            jp _ToneEnd
-
-            _Tone1:         ; Tone1
-                ld a,b
-                ld (VGMPSGTone1stByte),a
-                
-                and %01100000   ; Is it noise?
-                cp  %01100000
-                jp nz,+++
-                ld a,b
-                and %11110111
-                cp  %11100011   ; Is it periodic tone2?
-                jp z,+
-                ld a,0
-                jp ++
-                +:
-                ld a,1
-                ++:
-                ld (VGMPSGNoiseIsPeriodic),a
-                +++:
-                jp _ToneEnd
-
-            _Tone2:         ; Tone2
-                ld a,(VGMPSGTone1stByte)    ; Look at 1st byte
-                srl a           ; Extract channel number
-                srl a
-                srl a
-                srl a
-                srl a
-                and %00000011
-                cp 3            ; If it's channel 3 then exit
-                jp z,_ToneEnd
-                ld c,a          ; c = channel
-                push de
-                    ; Extract frequency
-                    ld a,(VGMPSGTone1stByte)
-                    and $0f
-                    ld e,a      ; de = ????????0000ffff
-                    ld a,b
-                    and %00111111   ; also resets carry
-                    ld d,a      ; d = 00ffffff
-                    ld a,$00
-                    rr d        ; Shift right, input from carry, output into carry
-                    rr a        ; Do the same
-                    rr d        ; Repeat 4 times
-                    rr a
-                    rr d
-                    rr a
-                    rr d
-                    rr a        ; Now d = 000000ff, a = ffff0000
-                    or e
-                    ld e,a      ; Now de = 000000ffffffffff which is correct (at last)
-
-                  +:push hl
-                    push de
-                        ld hl,VGMPSGTones
-                        ld d,$00
-                        ld e,c
-                        add hl,de
-                        add hl,de   ; Add channel*2 to offset to get the right slot
-                    pop de
-                        ld (hl),e   ; Finally store it
-                        inc hl
-                        ld (hl),d
-                    pop hl                       
-                pop de
-            _ToneEnd:
-        pop bc
-
-        inc bc
-        jp GetData
-
-    WaitNSamples:
-        ; get number
-        push af
-/*            ; Debug dispaly of wait value (and below)
-            push hl
-                ld hl,NameTableAddress
-                call VRAMToHL
-            pop hl*/
-            inc bc
-            ld a,(bc)
-;            call WriteNumber
-            ld e,a  ; read into e then d (big-endian)
-            inc bc
-            ld a,(bc)
-;            call WriteNumber
-            ld d,a
-            inc bc
-        pop af
-        ; Add it to the total
+    ; Data analysis:
+    push bc
+      ; Is it a volume write?
+      ld b,a  ; b = backup of data written
+      and %10010000   ; volume write bitmask
+      cp  %10010000
+      ld a,b  ; restore
+      jr nz,_NotVolume
+      ; It is a volume write
+      ; Channel = bits 5 and 6
+      srl a
+      srl a
+      srl a
+      srl a
+      srl a
+      and %00000011
+      ld c,a  ; c = channel
+      push hl
+        ld hl,VGMPSGVolumes
+        ld e,c
+        ld d,$00
         add hl,de
-        ; If it's gone past ffff then I need to handle that :/
-        ; The carry flag will be set if it is
-        jp nc,DoINeedToWait
+        ld (hl),b
+      pop hl
+      jr _PSGAnalysisEnd
 
-        ld a,(VGMWaitTotalOverflow)
-        inc a   ; Add 2 for every overflow = 2 x 8000 to add
-        inc a
-        ld (VGMWaitTotalOverflow),a
+_NotVolume:
+      bit 7,a         ; Is it a tone2?
+      jr z,_Tone2
+      ; must be a tone1
+      and %10010000   ; Is it a tone1?
+      cp  %10000000
+      jr z,_Tone1
+XX:
+      ld a,$ff        ; reset VGMPSGTone1stByte if it's not a tone write
+      ld (VGMPSGTone1stByte),a
 
-        jp DoINeedToWait
+      jr _PSGAnalysisEnd
 
-    Wait160th:  ; add 735 to the total number of samples
-        inc bc
-        ld de,735
-        add hl,de
-        jp DoINeedToWait
+      _Tone1:         ; Tone1
+          ld a,b
+          ld (VGMPSGTone1stByte),a
 
-    Wait150th:  ; add 882 to the total number of samples
-        inc bc
-        ld de,882
-        add hl,de
-        jp DoINeedToWait
+          and %01100000   ; Is it noise?
+          cp  %01100000
+          jr nz,+++
+          ld a,b
+          and %11110111
+          cp  %11100011   ; Is it periodic tone2?
+          jr z,+
+          xor a
+          jr ++
+          +:
+          ld a,1
+          ++:
+          ld (VGMPSGNoiseIsPeriodic),a
+          +++:
+          jr _PSGAnalysisEnd
 
-    EndOfFile:
-        ; don't inc bc
-        call VGMDoLoop
-        jp GetData
+      _Tone2:         ; Tone2
+          ld a,(VGMPSGTone1stByte)    ; Look at 1st byte
+          srl a           ; Extract channel number
+          srl a
+          srl a
+          srl a
+          srl a
+          and %00000011
+          cp 3            ; If it's channel 3 then exit
+          jr z,_PSGAnalysisEnd
+          ld c,a          ; c = channel
+          push de
+              ; Extract frequency
+              ld a,(VGMPSGTone1stByte)
+              and $0f
+              ld e,a      ; de = ????????0000ffff
+              ld a,b
+              and %00111111   ; also resets carry
+              ld d,a      ; d = 00ffffff
+              xor a
+              rr d        ; Shift right, input from carry, output into carry
+              rr a        ; Do the same
+              rr d        ; Repeat 4 times
+              rr a
+              rr d
+              rr a
+              rr d
+              rr a        ; Now d = 000000ff, a = ffff0000
+              or e
+              ld e,a      ; Now de = 000000ffffffffff which is correct (at last)
 
-    YM2413:
-        inc bc
-        ld a,(bc)   ; Register
-        out ($f0),a
-        ld e,a      ; e = register
-        inc bc
-        ld a,(bc)   ; Get data
-        out ($f1),a
-        inc bc
-        ld d,a      ; d = data
-        ; Analyse the register
-        ld a,e
-        and $f0
-        cp $10
-        jp z,_1x
-        cp $20
-        jp z,_2x
-        jp GetData
+            +:push hl
+              push de
+                  ld hl,VGMPSGTones
+                  ld d,$00
+                  ld e,c
+                  add hl,de
+                  add hl,de   ; Add channel*2 to offset to get the right slot
+              pop de
+                  ld (hl),e   ; Finally store it
+                  inc hl
+                  ld (hl),d
+              pop hl
+          pop de
+_PSGAnalysisEnd:
+    pop bc
+    jp GetData
 
-        _1x:    ; FNum low bits
-        push bc
-        push hl
-            ld a,e
-            and $0f
-            cp $6
-            jp nc,+  ; don't look at it if it's past $x5
+WaitNSamples:
+    ; get number
+    GetByte
+    ld e,a  ; read into e then d (big-endian)
+    GetByte
+    ld d,a
+    ; fall through
 
-            sla a
-            ld b,0
-            ld c,a
-            ld hl,VGMYM2413FNums
-            add hl,bc
-            ld (hl),d   ; store new value (ignore high byte)
-            +:
-        pop hl
-        pop bc
-        jp GetData
+_WaitDESamples:
+    ; Add it to the total
+    add hl,de
+    ; If it's gone past ffff then I need to handle that :/
+    ; The carry flag will be set if it is
+    jp nc,DoINeedToWait
 
-        _2x:    ; FNum high bit/block/key
-        push bc
-        push hl
-            ld a,e
-            and $0f
-            ld e,a  ; e = channel number
-            cp $6
-            jp nc,+  ; don't look at it if it's past $5 (rhythm mode has 0-5 tone channels)
+    ld a,(VGMWaitTotalOverflow)
+    inc a   ; Add 2 for every overflow = 2 x 8000 to add
+    inc a
+    ld (VGMWaitTotalOverflow),a
 
-            sla a   ; I want 2*ch+1
-            inc a
-            ld b,0
-            ld c,a
-            ld hl,VGMYM2413FNums
-            add hl,bc
-            ld a,d
-            and %00000001
-            ld (hl),a   ; store new high bit (ignore low byte)
+    jr DoINeedToWait
 
-            ld hl,VGMYM2413Blocks   ; Block
-            ld b,0
-            ld c,e
-            add hl,bc
-            ld a,d
-            rra
-            and %00000111
-            ld (hl),a
+Wait160th:  ; add 735 to the total number of samples
+    ld de,735
+    add hl,de
+    jr DoINeedToWait
 
-            ld hl,VGMYM2413Keys     ; Key
-            ld b,0
-            ld c,e
-            add hl,bc
-            ld (hl),d
+Wait150th:  ; add 882 to the total number of samples
+    ld de,882
+    add hl,de
+    jr DoINeedToWait
 
-            +:
-        pop hl
-        pop bc
-        jp GetData
+EndOfFile:
+    call VGMDoLoop
+    jp GetData
 
-    YMxxxx: ; discard
-        inc bc
-        inc bc
-        inc bc
-        jp GetData
+YM2413:
+    GetByte
+    out ($f0),a
+    ld e,a      ; e = register
 
-    DoINeedToWait:
-        ; If hl>=FrameLength then subtract FrameLength and exit loop
-        ; otherwise loop
+    GetByte
+    out ($f1),a
+    ld d,a      ; d = data
 
-        ; Debug display of information (wait total)
-/*        push hl
-            ld hl,NameTableAddress
-            call VRAMToHL
-        pop hl
-        ld a,h
-        call WriteNumber
-        ld a,l
-        call WriteNumber
+    ; Analyse the register
+    ld a,e
+    and $f0
+    cp $10
+    jr z,_1x
+    cp $20
+    jr z,_2x
+    jp GetData
+
+_1x:    ; FNum low bits
+    push bc
+    push hl
+      ld a,e
+      and $0f
+      cp $6
+      jr nc,+  ; don't look at it if it's past $x5
+
+      sla a
+      ld b,0
+      ld c,a
+      ld hl,VGMYM2413FNums
+      add hl,bc
+      ld (hl),d   ; store new value (ignore high byte)
++:  pop hl
+    pop bc
+    jp GetData
+
+_2x:    ; FNum high bit/block/key
+    push bc
+    push hl
+      ld a,e
+      and $0f
+      ld e,a  ; e = channel number
+      cp $6
+      jr nc,+  ; don't look at it if it's past $5 (rhythm mode has 0-5 tone channels)
+
+      sla a   ; I want 2*ch+1
+      inc a
+      ld b,0
+      ld c,a
+      ld hl,VGMYM2413FNums
+      add hl,bc
+      ld a,d
+      and %00000001
+      ld (hl),a   ; store new high bit (ignore low byte)
+
+      ld hl,VGMYM2413Blocks   ; Block
+      ld b,0
+      ld c,e
+      add hl,bc
+      ld a,d
+      rra
+      and %00000111
+      ld (hl),a
+
+      ld hl,VGMYM2413Keys     ; Key
+      ld b,0
+      ld c,e
+      add hl,bc
+      ld (hl),d
+
++:  pop hl
+    pop bc
+    jp GetData
+/*
+YMxxxx: ; discard 2 bytes
+    GetByte
+    GetByte
+    jp GetData
 */
-        ld (VGMWaitTotal),hl    ; store hl in memory
-        ld de,(VGMFrameLength)
-        ld a,(VGMPlayerState)   ; fast forward?
-        cp VGMFast
-        jp nz,_NotFast
-        push hl
-            push de
-            pop hl
-            add hl,hl
-            add hl,hl
-            push hl
-            pop de
-        pop hl
-        _NotFast:
-        scf
-        ccf                     ; make sure carry bit is 0 because I have to use sbc (no 16-bit sub)
-        sbc hl,de               ; subtract samples per frame
-        jp c,NoWait
-        ; If we're here then the result is >=0
-        ; so we want to put the new value in memory
-        ld (VGMWaitTotal),hl
-        ; add frame length to the total number of samples played
-        push hl
-            ld hl,(VGMTimeSamples)
-            add hl,de
-            ld (VGMTimeSamples),hl
-            ld de,44100         ; see if it's over 44100
-            scf
-            ccf
-            sbc hl,de
-            jp c,_DoneTime
-            ; If we're here then hl was >44100
-            ld a,1
-            ld (SecondsChanged),a
-            _IncSeconds:
-                ld (VGMTimeSamples),hl  ; save the subtracted hl
-                ld a,(VGMTimeSecs)
-                inc a                   ; and add 1 second
-                daa
-                ld (VGMTimeSecs),a
-                cp $60                  ; if it's at 60 seconds...
-                jp z,_IncMinutes
-                jp _DoneTime
-            _IncMinutes:
-                ld a,$00                ; zero the seconds
-                ld (VGMTimeSecs),a
-                ld a,(VGMTimeMins)
-                inc a                   ; and add 1 minute
-                daa
-                ld (VGMTimeMins),a
-            _DoneTime:
-        pop hl
-        ; and exit to wait for the next vblank
-        ld (VGMCounterLocation),bc
-        jp EndGetDataLoop
-    NoWait:
-        ; If we're here then the result is <0, ie. total<frame size so I can safely add $8000
-        ld hl,(VGMWaitTotal)    ; restore hl
-        ld a,(VGMWaitTotalOverflow)
-        cp 0
-        jp z,GetData            ; continue
-        ; Pay back an overflow
-        dec a
-        ld (VGMWaitTotalOverflow),a
-        ld de,$8000
-        add hl,de
-        jp DoINeedToWait    ; Yes I do!
-    EndGetDataLoop:
+
+
+DoINeedToWait:
+    ; If hl>=FrameLength then subtract FrameLength and exit loop
+    ; otherwise loop
+
+.ifdef Debug
+    ; Debug display of information (wait total)
+    push hl
+      NameTableAddressInHL 3, 24
+      call VRAMToHL
+    pop hl
+    ld a,h
+    call WriteNumber
+    ld a,l
+    call WriteNumber
+.endif
+
+    ld (VGMWaitTotal),hl    ; store hl in memory
+    ld de,(VGMFrameLength)
+    ld a,(VGMPlayerState)   ; fast forward?
+    cp VGMFast
+    jr nz,+
+    ; fast: multiply frame length by 4
+    ; so we eat up 4x wait length
+    push hl
+      ld h,d
+      ld l,e
+      add hl,hl
+      add hl,hl
+      ld d,h
+      ld e,l
+    pop hl
+
++:  or a
+    sbc hl,de               ; subtract samples per frame
+    jr c,NoWait
+    ; If we're here then the result is >=0
+    ; so we want to put the new value in memory
+    ld (VGMWaitTotal),hl
+
+    ; add frame length to the time played
+    push hl
+      ld hl,(VGMTimeSamples)
+      add hl,de
+      ld (VGMTimeSamples),hl
+
+      ld de,44100         ; see if it's over 44100
+      or a
+      sbc hl,de
+      jr c,+
+
+      ; If we're here then hl was >44100
+      ; so increment the number of seconds
+      ld a,1
+      ld (SecondsChanged),a
+
+      ; save the remainder samples
+      ld (VGMTimeSamples),hl
+      ; increment the seconds
+      ld a,(VGMTimeSecs)
+      inc a
+      daa
+      ld (VGMTimeSecs),a
+      cp $60                  ; if it's at 60 seconds...
+      jr nz,+
+      xor a                ; zero the seconds
+      ld (VGMTimeSecs),a
+      ld a,(VGMTimeMins)
+      inc a                   ; and add 1 minute
+      daa
+      ld (VGMTimeMins),a
++:  pop hl
+    ; and exit to wait for the next vblank
+    ld (VGMCounterLocation),bc
+    jr EndGetDataLoop
+
+NoWait:
+    ; If we're here then the result is <0, ie. total<frame size 
+    ; that also so I can safely add $8000 to pay back any overflows
+    ld hl,(VGMWaitTotal)    ; restore hl
+
+    ld a,(VGMWaitTotalOverflow)
+    or a
+    jp z,GetData            ; nothing to pay back
+
+    ; Pay back an overflow
+    dec a
+    ld (VGMWaitTotalOverflow),a
+    ld de,$8000
+    add hl,de
+    jr DoINeedToWait    ; Yes I do!
+
+EndGetDataLoop:
     pop hl
     pop de
     pop bc
@@ -1626,18 +1741,21 @@ VGMUpdate:
 ; Maybe add a picture here?
 ;==============================================================
 .section "No VGM file" SEMIFREE
-NoVGMFile:
+_ClearScreen:
     ; Clear the screen
     ld hl,NameTableAddress
     call VRAMToHL
     ld bc,$700
-    ld a,$00
-    _Loop:
-        out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
-        dec c
-        jp nz,_Loop
-        dec b
-        jp nz,_Loop
+    xor a
+  -:out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
+    dec c
+    jr nz,-
+    dec b
+    jr nz,-
+    ret
+
+NoVGMFile:
+    call _ClearScreen
 
     ; Display a message
     ld iy,NameTableAddress
@@ -1654,15 +1772,52 @@ NoVGMFile:
         call WriteNumber
         inc hl
         dec c
-        jp nz,_Loop1
+        jr nz,_Loop1
 */
     ; Main screen turn on
-    ld a,%11010000
+    ld a,%11000000
     out ($bf),a
     ld a,$81
     out ($bf),a
-    
-    halt
+
+  -:
+.ifdef EasterEgg
+    in a,($dc)
+    cp %11001110 ; check for U+1+2
+    jr z,_EasterEgg
+.endif
+    jr -
+
+.ifdef EasterEgg
+_EasterEgg:
+    call _ClearScreen
+
+    ; Main screen turn off
+    ld a,%10000000
+    out ($bf),a
+    ld a,$81
+    out ($bf),a
+
+    ; load tiles
+    ld de,$4000
+    ld hl,ETiles
+    call LoadTiles4BitRLENoDI
+
+    ; load tilemap
+    ld de,$4000+$3800
+    ld hl,ETileNumbers
+    call LoadTilemapToVRAM
+
+    ; Main screen turn on
+    ld a,%11000000
+    out ($bf),a
+    ld a,$81
+    out ($bf),a
+
+    ; stop
+  -:jr -
+.endif
+
 .ends
 
 ;==============================================================
@@ -1709,7 +1864,7 @@ NextVis:
         inc a
         cp NumVisRoutines
         jr nz,_NoWrap
-        ld a,$00
+        xor a
         _NoWrap:
         ld (VisNumber),a
         call InitialiseVisRoutine
@@ -1756,7 +1911,7 @@ InitialiseVisRoutine:    ; Per-routine initialisation (runs in VBlank)
         ld c,(iy+0)
         ld (VisRoutine),bc
 
-        ld a,0                      ; Reset flag
+        xor a                      ; Reset flag
         ld (VisChanged),a
     pop bc
     pop iy
@@ -1789,11 +1944,11 @@ ClearBuffer:   ; uses a,c,hl
     ; Clear buffer every frame
     ld c,64
     ld hl,VisBuffer
-  -:ld a,0
+  -:xor a
     ld (hl),a
     inc hl
     dec c
-    jp nz,-
+    jr nz,-
     ret
 
 DrawVisBuffer:
@@ -1817,24 +1972,24 @@ DrawVisBuffer:
                 sla d
                 sla d
                 sub d               ; Subtract d = minimum value
-                jp nc,_AboveMinimum
-                ld a,0              ; If the result is negative then I want 0
+                jr nc,_AboveMinimum
+                xor a              ; If the result is negative then I want 0
                 _AboveMinimum:
                 cp 9                ; Is it 9 or more?
-                jp c,_LessThan8
+                jr c,_LessThan8
                 ld a,8              ; If not, I want 8
                 _LessThan8:
                 add a,96
                 out ($BE),a
                 push hl ; delay
                 pop hl
-                ld a,$00
+                xor a
                 out ($BE),a
                 inc hl
                 dec c
-                jp nz,_DrawRow
+                jr nz,_DrawRow
             dec b
-            jp nz,_DrawVisBufferLoop
+            jr nz,_DrawVisBufferLoop
     pop af
     pop bc
     pop de
@@ -1891,7 +2046,7 @@ FrequencyVis:
             inc iy
 
             dec b           ; Loop counter
-            jp nz,_Loop
+            jr nz,_Loop
 
         ; Noise: bump every value by up to 3
         ld c,32
@@ -1908,7 +2063,7 @@ FrequencyVis:
             ld (hl),a
             inc hl
             dec c
-            jp nz,_AddNoise
+            jr nz,_AddNoise
     pop iy
     pop ix
     pop bc
@@ -1937,10 +2092,10 @@ VolumeVis:
                 ld (ix+0),a
                 inc ix
                 dec c
-                jp nz,_VolVisFillLoop
+                jr nz,_VolVisFillLoop
             inc hl
             dec b
-            jp nz,_VolVisLoop
+            jr nz,_VolVisLoop
     pop ix
     pop bc
     pop hl
@@ -1959,11 +2114,11 @@ PianoVisInit:
         ld b,64*2
         otir
         ; draw 2 blank lines
-        ld a,0
+        xor a
         ld b,32*2*2
       -:out ($be),a
         dec b
-        jp nz,-
+        jr nz,-
 
         ; Define hand sprites
         ld hl,SpriteTableAddress
@@ -1972,21 +2127,21 @@ PianoVisInit:
         ld c,12*2
       -:out ($be),a
         dec c
-        jp nz,-
+        jr nz,-
         ld bc,128
         add hl,bc
         call VRAMToHL
         ld c,12
-      -:ld a,0              ; Hand x-position
+      -:xor a              ; Hand x-position
         out ($be),a
-        ld a,$bc            ; Tile number (-$100 for spriteset 1)
+        ld a,$b0            ; Tile number (-$100 for spriteset 1)
         out ($be),a
         ld a,8
         out ($be),a
-        ld a,$be
+        ld a,$b3
         out ($be),a
         dec c
-        jp nz,-
+        jr nz,-
     pop hl
     pop bc
     pop af
@@ -2036,7 +2191,7 @@ PianoXPositions:
 .db 112,114,116,118,120,124,126,128,130,132,134,136
 .db 140,142,144,146,148,152,154,156,158,160,162,164
 .db 168,170,172,174,176,180,182,184,186,188,190,192
-.db 196,198,190,202,204,208,210,212,214,216,218,220
+.db 196,198,200,202,204,208,210,212,214,216,218,220
 .db 224,226,228,230,232,236,238,240,242,244,246,0
 
 .define n 108   ; y-pos (note)
@@ -2077,10 +2232,10 @@ PianoVis:
     ; Handle periodic noise when c=1
     ld a,c
     cp 1
-    jp nz,+
+    jr nz,+
     ld a,(VGMPSGNoiseIsPeriodic)
     cp 1
-    jp nz,+
+    jr nz,+
     ; I need to divide the frequency by 16, ie, <<4
     sla e
     rl  d
@@ -2102,7 +2257,7 @@ PianoVis:
     ld a,(hl)
     and $f
     cp $f
-    jp z,_NoHand
+    jr z,_NoHand
     ld b,0          ; counter
     push iy
     ld iy,PianoVisMinValsPSG; values to look at
@@ -2112,11 +2267,11 @@ PianoVis:
     ld h,(iy+1)     ; get value stored there
     ld l,(iy+0)
     sbc hl,de       ; Subtract actual value
-    jp c,+          ; Loop until I find a value less than or equal to the note
+    jr c,+          ; Loop until I find a value less than or equal to the note
     inc iy
     inc iy
     inc b
-    jp -
+    jr -
   +:pop iy          ; b is now the key number, counting from the left
     push bc         ; need to preserve c
         ld c,b
@@ -2130,7 +2285,7 @@ PianoVis:
         ld a,(hl)
         ld (iy+1),a
     pop bc
-    jp +
+    jr +
     _NoHand:    ; Don't show the hand if applicable
     ld (iy+1),208+16
   +:pop bc
@@ -2139,7 +2294,7 @@ PianoVis:
     inc ix
     inc iy
     inc iy
-    jp nz,--
+    jr nz,--
 
     ; Now do FM :)
     ld ix,0 ; channel number
@@ -2151,7 +2306,7 @@ PianoVis:
     ld de,VGMYM2413Keys
     add hl,de
     bit 4,(hl)  ; Is the key pressed?
-    jp z,_NoHand2
+    jr z,_NoHand2
     ; Get FNum
     push ix
         ld de,VGMYM2413FNums
@@ -2167,18 +2322,18 @@ PianoVis:
         ld a,(ix+0)     ; Block
     pop ix
     or a
-    jp z,+              ; ship shifting if a=0
+    jr z,+              ; ship shifting if a=0
   -:sla l               ; shift hl by Block bits
     rl  h
-    jp c,_Overflow
+    jr c,_Overflow
     dec a
-    jp nz,-
+    jr nz,-
   +:push hl
     pop de              ; Now de = FNum << Block
-    jp _DEtoNoteNum
+    jr _DEtoNoteNum
     _Overflow:          ; If, when shifting FNum by Block, it overflows 16 bits then act as if the value was 65535
     ld de,65534
-;    jp _DEtoNoteNum
+;    jr _DEtoNoteNum
     _DEtoNoteNum:
     ld b,0          ; counter
     push iy
@@ -2189,11 +2344,11 @@ PianoVis:
     ld h,(iy+1)     ; get value stored there
     ld l,(iy+0)
     sbc hl,de       ; Subtract actual value
-    jp nc,+         ; Loop until I find a value greater than the note
+    jr nc,+         ; Loop until I find a value greater than the note
     inc iy
     inc iy
     inc b
-    jp -
+    jr -
   +:dec b           ; b is now the key number, counting from the left
     pop iy
     push bc         ; need to preserve c
@@ -2208,14 +2363,14 @@ PianoVis:
         ld a,(hl)
         ld (iy+1),a
     pop bc
-    jp +
+    jr +
     _NoHand2:    ; Don't show the hand if applicable
     ld (iy+1),208+16
   +:dec c
     inc ix
     inc iy
     inc iy
-    jp nz,--
+    jr nz,--
 
     pop hl
     pop de
@@ -2250,7 +2405,7 @@ DrawPianoVis:
         inc ix
         inc ix
         dec b
-        jp nz,-
+        jr nz,-
 
         ld bc,128
         add hl,bc
@@ -2280,7 +2435,7 @@ DrawPianoVis:
             dec b   ;  4
             inc ix  ; 10
             inc ix  ; 10
-            jp nz,- ; 10 = 53 :P
+            jr nz,- ; 10 = 53 :P
     pop hl
     pop ix
     pop bc
@@ -2302,12 +2457,12 @@ InitSnow:
         ld hl,VisLocation
         call VRAMToHL
         ld bc,32*2*5
-      -:ld a,0
+      -:xor a
         out ($be),a
         dec bc
         ld a,b
         or c
-        jp nz,-
+        jr nz,-
 
         ; Fill vis area with my text
         ld hl,SnowText
@@ -2318,14 +2473,14 @@ InitSnow:
         ld hl,SpriteTableAddress+128
         call VRAMToHL
         ld c,NumSnowFlakes
-      -:ld a,0
+      -:xor a
         out ($be),a
-        ld a,$b0                ; Tile number
+        ld a,$b5                ; Tile number - blank
         push ix
         pop ix      ; delay
         out ($be),a
         dec c
-        jp nz,-
+        jr nz,-
 
         ; Fill buffer with initial random poitions
         ld hl,VisBuffer
@@ -2335,7 +2490,7 @@ InitSnow:
         ld (hl),a
         inc hl
         dec c
-        jp nz,-
+        jr nz,-
 
     pop hl
     pop bc
@@ -2366,10 +2521,10 @@ CalcSnow:
         cpl
         and $0f
         cp $a
-        jp c,+
+        jr c,+
     pop af  ; vol high
     add a,(ix+1) ; change value semi-randomly
-    jp ++
+    jr ++
 
     +: ; vol low
     pop af
@@ -2381,15 +2536,15 @@ CalcSnow:
     and $3      ; remove high bits
     dec a       ; now it's -1, 0, +1 or +2
     cp 2
-    jp nz,+
-    ld a,0      ; make +2 -> 0
+    jr nz,+
+    xor a      ; make +2 -> 0
     +:
 
     add a,(ix+0); Add it to the current value
     ld (ix+0),a ; that's what I want
     inc ix
     dec c
-    jp nz,-
+    jr nz,-
 
     ld c,NumSnowFlakes
     -:          ; Y values:
@@ -2397,7 +2552,7 @@ CalcSnow:
     inc a       ; increment
     ld (ix+0),a ; that's what I want
     cp $ff-$20  ; If it's time to change...
-    jp nz,+
+    jr nz,+
     ; I want a new random x-pos
     call GetRandomNumber
     and 248
@@ -2405,7 +2560,7 @@ CalcSnow:
     +:
     inc ix
     dec c
-    jp nz,-
+    jr nz,-
 
     pop bc
     pop af
@@ -2420,20 +2575,20 @@ UpdateSnow:
         ld a,(VGMPSGVolumes+3)
         cpl
         and $0f
-        cp $0
-        jp z,+
+;        cp $0
+        jr z,+
         ; noise on
         ld c,clRGB233
-        jp ++
+        jr ++
       +:; noise off
         ld c,clWhite
 
      ++:; Write colour to CRAM
-        ld a,22
+        ld a,22                ; palette index 22
         out ($bf),a
-        ld a,%11000000
+        ld a,%11000000         ; CRAM write
         out ($bf),a
-        ld a,c
+        ld a,c                 ; data
         out ($be),a
 
         ; Display sprites
@@ -2444,7 +2599,7 @@ UpdateSnow:
         ld ix,VisBuffer
       -:ld a,(ix+0)
         out ($be),a
-        ; Sprite number $bb or ???
+        ; Sprite number $b4+
         ld a,c      ; snowflake number
         add a,(ix+0); x-pos
         rra
@@ -2452,11 +2607,11 @@ UpdateSnow:
         rra
         rra         ; look at a higher bit for slower changing
         and %110
-        add a,$b5   ; start of snowflake sprites
+        add a,$b4   ; start of snowflake sprites
         out ($be),a ; skip sprite number
         inc ix
         dec c
-        jp nz,-
+        jr nz,-
 
         ld hl,SpriteTableAddress
         call VRAMToHL
@@ -2468,7 +2623,7 @@ UpdateSnow:
         inc hl
         dec c
         nop
-        jp nz,-
+        jr nz,-
 
     pop hl
     pop bc
@@ -2490,7 +2645,7 @@ GetRandomNumber:
     jp pe,+             ; if odd parity, input 1 into shift register (ie. xor of tapped bits)
     set 7,d
   +:dec c
-    jp nz,-
+    jr nz,-
 
     ld (RandomSR),de    ; Put shift register back in RAM
     ld a,b              ; Return in a
@@ -2506,34 +2661,34 @@ GetRandomNumber:
 ; VDP initialisation data
 ;==============================================================
 VdpData:
-.db %00000110,$80
+.db %00000100,$80
 ;    |||||||`- Disable synch
 ;    ||||||`-- Enable extra height modes
 ;    |||||`--- SMS mode instead of SG
 ;    ||||`---- Shift sprites left 8 pixels
 ;    |||`----- Enable line interrupts
 ;    ||`------ Blank leftmost column for scrolling
-;    |`------- Fix top 2 rows during scrolling
-;    `-------- Fix right 8 columns during scrolling
+;    |`------- Fix top 2 rows during horizontal scrolling
+;    `-------- Fix right 8 columns during vertical scrolling
 .db %10000000,$81
-;    ||||| |`- Zoomed sprites -> 16x16 pixels
-;    ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
-;    ||||`---- 30 row/240 line mode
-;    |||`----- 28 row/224 line mode
-;    ||`------ VBlank interrupts
-;    |`------- Enable display
-;    `-------- Must be set (VRAM size bit)
-.db NameTableAddress>>10,$82
-.db SpriteTableAddress>>7,$85
-.db SpriteSet<<2,$86
-.db $f,$87
+;     ||||||`- Zoomed sprites -> 16x16 pixels
+;     |||||`-- Doubled sprites -> 2 tiles per sprite, 8x16
+;     ||||`--- Mode5 bit on PBC - must be 0
+;     |||`---- 30 row/240 line mode
+;     ||`----- 28 row/224 line mode
+;     |`------ Enable VBlank interrupts
+;     `------- Enable display
+.db (NameTableAddress>>10) |%11110001,$82
+.db (SpriteTableAddress>>7)|%10000001,$85
+.db (SpriteSet<<2)         |%11111011,$86
+.db $f|$f0,$87
 ;    `-------- Border palette colour (sprite palette)
 .db $00,$88
 ;    ``------- Horizontal scroll
-.db $20,$89
+.db $00,$89
 ;    ``------- Vertical scroll
 .db $ff,$8a
-;    ``------- Line interrupt spacing
+;    ``------- Line interrupt spacing ($ff to disable)
 VdpDataEnd:
 
 ;==============================================================
@@ -2555,29 +2710,21 @@ Palettes:
 .db clRGB300,clRGB322,clRGB323  ; bright red
 
 TileData:
-;.include "fonts\Arial.inc"
-;.include "fonts\Bookman.inc"
-;.include "fonts\Courier.inc"
-;.include "fonts\Dungeon.inc"
-;.include "fonts\Lucida Console.inc"
-;.include "fonts\South Park.inc"
-;.include "fonts\Times.inc"
-;.include "fonts\Trebuchet.inc"
-.include "fonts\Verdana.inc"
-;.include "fonts\Westminster.inc"
+.incbin "fonts\Verdana (tiles).pscompr"
 
 BigNumbers:
-.include "Big numbers.inc"
+.incbin "Big numbers (tiles).pscompr"
 
 Pad:
-.include "3D pad.inc"
+.incbin "3D pad (tiles).pscompr"
 
 PadData:
 .include "3D pad (tile numbers).inc"
 PadDataEnd:
+;.incbin "3D pad (tile numbers).pscompr"
 
 ScaleData:
-.include "scale.inc"
+.incbin "Scale (tiles).pscompr"
 
 TextData:
 .incbin "Text.txt"
@@ -2588,15 +2735,23 @@ NoVGMText:
 .db $00
 
 PianoTiles:
-.include "piano.inc"
+.incbin "piano (tiles).pscompr"
 
 PianoTileNumbers:
 .include "piano (tile numbers).inc"
 
 Sprites:
-.include "snow.inc"
-.include "hand.inc"
+.incbin "Sprites (tiles).pscompr"
 
+.ifdef EasterEgg
+
+ETiles:
+.incbin "E (tiles).pscompr"
+
+ETileNumbers:
+.incbin "E (tile numbers).pscompr"
+
+.endif
 
 .section "VGM logo displayer" SEMIFREE
 ;==============================================================
@@ -2609,6 +2764,7 @@ SplashScreenVBlank:
     cp  %00111111
     ret z
     ; I want to jump elsewhere
+    ; I think this is some almight kludge I invented?
     inc sp
     inc sp
     inc sp
@@ -2619,43 +2775,36 @@ DisplayVGMLogo:
     call NoSprites
 
     ; Set all palette entries to white
-    ld a,0
+    xor a          ; palette index 0
     out ($bf),a
     ld a,$c0
-    out ($bf),a     ; Set to CRAM
+    out ($bf),a     ; CRAM write
     ld c,32
     ld a,clWhite
     _WhiteLoop:
         out ($be),a
         dec c
-        jp nz,_WhiteLoop
+        jr nz,_WhiteLoop
 
     ; Load tiles
-    ld hl,1
-    ld ix,LogoTiles
-    ld bc,$132
-    ld d,4
-    call LoadTiles
+    ld de,$4000
+    ld hl,LogoTiles
+    call LoadTiles4BitRLENoDI
 
-    ld hl,NameTableAddress+2*(32*6+1)
+    ld hl,NameTableAddress+2*(32*0+1)
     call VRAMToHL
 
     ; Draw tiles
+    ld de,$7800
     ld hl,LogoTileNumbers
-    ld c,$be
-    ld b,0
-    otir
-    otir
-    otir
-    ld b,$c0
-    otir
+    call LoadTilemapToVRAM
 
     ; Set VBlank routine
     ld hl,SplashScreenVBlank
     ld (VBlankRoutine),hl
 
     ; Turn screen on
-    ld a,%11110000
+    ld a,%11100000
     out ($bf),a
     ld a,$81
     out ($bf),a
@@ -2676,14 +2825,14 @@ DisplayVGMLogo:
     pop hl
     call LoadPalette
     dec c
-    jp nz,_FadeIn
+    jr nz,_FadeIn
 
     ld c,20 ; how many frames to wait
     _WaitLoop:
         ei
         halt
         dec c
-        jp nz,_WaitLoop
+        jr nz,_WaitLoop
 
     ld b,7
     ld de,FadeOutPalette
@@ -2700,7 +2849,7 @@ DisplayVGMLogo:
     inc c
     ld a,c
     cp 32+16
-    jp nz,_FadeOut
+    jr nz,_FadeOut
 
     ret
 
@@ -2715,10 +2864,10 @@ FadeOutPalette:
 .db clRGB010,clRGB121,clRGB232,clRGB333,clRGB222,clRGB111,clRGB000
 
 LogoTiles:
-.include "VGM logo.inc"
+.incbin "VGM logo (tiles).pscompr"
 
 LogoTileNumbers:
-.include "VGM logo (tile numbers).inc"
+.incbin "VGM logo (tile numbers).pscompr"
 
 .ends
 
@@ -2746,7 +2895,7 @@ SaveSettings:
         ld a,(PaletteNumber)
         ld ($8005),a
 
-        ld a,0          ; deselect BBRAM
+        xor a          ; deselect BBRAM
         ld ($fffc),a
     pop de
     pop hl
@@ -2770,11 +2919,11 @@ LoadSettings:
             ld a,(hl)   ; read ROM
             cp (ix+0)   ; compare to RAM
             ; if they aren't equal then exit
-            jp nz,_Error
+            jr nz,_Error
             inc hl
             inc ix
             dec c
-            jp nz,-
+            jr nz,-
 
         ; If we're here then ther marker is OK, so read stuff in
         ld a,($8004)
@@ -2782,16 +2931,16 @@ LoadSettings:
         ld a,($8005)
         dec a
         ld (PaletteNumber),a
-        jp ++
+        jr ++
         
         _Error:
-        ld a,0
+        xor a
         ld (VisNumber),a
         ld a,-1
         ld (PaletteNumber),a
 
         ++:
-        ld a,0          ; deselect BBRAM
+        xor a          ; deselect BBRAM
         ld ($fffc),a
     pop ix
     pop hl
@@ -2800,3 +2949,70 @@ LoadSettings:
     ret
 
 .ends
+
+.section "Check port 3e value" free
+CheckPort3EValue:
+  ld a,(Port3EValue)
+  cpl               ; make 1 = true
+  and %11101000     ; mask to expansion, cart, card, BIOS slots
+  cp  %10000000
+  ret z
+  cp  %01000000
+  ret z
+  cp  %00100000
+  ret z
+  cp  %00001000
+  ret z
+  ; value is obviously wrong - assume cartridge slot
+  ld a,%10101011 ; enable normal stuff
+  ld (Port3EValue),a
+  ret
+.ends
+
+.section "FM enable" free
+; FM hardware enabled by setting bit 0 of port $f2
+; Port $3E:
+; 1 = disable, 0 = enable
+; %10101100
+;  ||||||``-- unknown
+;  |||||`---- I/O
+;  ||||`----- BIOS *
+;  |||`------ RAM
+;  ||`------- card *
+;  |`-------- cartridge *
+;  `--------- expansion slot *
+; * mutually exclusive
+
+  ; disable I/O chip
+  ld a,(Port3EValue)
+  set 2,a ; set bit 2 to disable the I/O chip
+  out ($3e),a
+
+  ld a,1
+  out ($f2),a
+
+  ; enable I/O chip
+  ld a,(Port3EValue)
+  out ($3e),a
+  ret
+
+  ; NOTE:
+  ; Real games also have to check that the FM hardware is there and,
+  ; if not, play PSG music. This is done by writing various values
+  ; to port $f2 while the I/O chip is disabled, and checking that
+  ; bit 0 (?) retains the value written. If so, it is let set to 1
+  ; and the function returns an appropriate value to the rest of the
+  ; code to say that FM is enabled.
+  ;
+  ; Since I'm playing FM regardless of whether it's there or not,
+  ; I don't bother here.
+
+.ends
+
+.ifdef TestFile
+.bank 1 slot 1
+.orga $8000
+.section "VGM file" force
+.incbin "Aztec Adventure - Ending.vgm"
+.ends
+.endif

@@ -20,9 +20,4 @@
  ± output.sms is the combined
    file which will be created
 
- # I like to sit out back
- # And look up at the
-   squirrels in the trees
- # They don't like radio tracks
- # And they don't ever
-   talk down to me            -E
+  http://www.smspower.org/music

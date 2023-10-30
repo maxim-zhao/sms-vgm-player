@@ -1,7 +1,7 @@
    SMS VGM player
-   v0.45 by Maxim
+   v0.93 by Maxim
 
- smspower.org/music
+ Video Game Music
 
   Time       Loop
       ±
@@ -15,14 +15,10 @@
 
 
 
-
-            GD3 tag:
-
+           GD3 tag:
 
 
 
 
 
-         Greetings to:
-    Yuehua, Bock, Heliophobe,
-   Mike, Charles, Steve, Dave
+ http://www.smspower.org/music/
