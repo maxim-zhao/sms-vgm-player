@@ -1,0 +1,28 @@
+        ±±±±±±±±±±±±±±±±
+        ± No VGM file! ±
+        ±±±±±±±±±±±±±±±±
+
+ No VGM file has been found by
+ the player. You have to add a
+ file to the player for it to
+ work. You can do this by using
+ this commandline:
+
+ copy /b vgmplayer.stub+
+         vgmfile.vgm output.sms
+
+      (all on one line)
+ where:
+ ± vgmplayer.stub is the 32KB
+   player file
+ ± vgmfile.vgm is an
+   UNCOMPRESSED VGM file
+ ± output.sms is the combined
+   file which will be created
+
+ # I like to sit out back
+ # And look up at the
+   squirrels in the trees
+ # They don't like radio tracks
+ # And they don't ever
+   talk down to me            -E
