@@ -3,3 +3,8 @@
 *.vgm
 *.stub
 *.sym
+linkfile
+*.inc
+*.pscompr
+*.o
+auto.makefile

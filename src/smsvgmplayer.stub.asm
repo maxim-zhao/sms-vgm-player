@@ -89,7 +89,7 @@ GD3DisplayerBuffer              dsb 33
 ;Useful defines and macros:
 .include "graphics.inc"
 
-.include "Phantasy Star decompressors.inc"
+.include "PhantasyStardecompressors.inc"
 
 .org $0000
 ;==============================================================
@@ -286,7 +286,7 @@ main:
 
   ; Put something in the shift register
   ld hl,$0210 ; the current time (am)
-              ; a better seed would be... better. eg. a counter
+              ; a better seed would be.. better. eg. a counter
   ld (RandomSR),hl
 
   ; Load settings, initialise stuff
@@ -333,7 +333,7 @@ main:
   ld a,$81
   out ($bf),a
 
-  /* Auto-play is weird... it plays super-fast
+  /* Auto-play is weird.. it plays super-fast
   call VGMStop
   call VGMUpdate
   call VGMPlayPause
@@ -1219,7 +1219,7 @@ GetData:
     ; First check to see if I've already moved to reading from RAM:
     ld de,VGMPagingBuffer
     push hl
-        ld h,b      ; ld hl,bc...
+        ld h,b      ; ld hl,bc..
         ld l,c
         or a        ; reset carry flag
         sbc hl,de   ; subtract value, if result is negative then it's not in RAM
@@ -1232,11 +1232,11 @@ GetData:
     ; otherwise, move back to ROM
     push hl
         ld de,VGMPagingBuffer-$8000+2
-        ld h,b      ; ld hl,bc...
+        ld h,b      ; ld hl,bc..
         ld l,c
         or a        ; reset carry flag (hmmph! doing this a lot)
         sbc hl,de
-        ld b,h      ; ld bc,hl...
+        ld b,h      ; ld bc,hl..
         ld c,l
     pop hl
     jr ReadData
@@ -1247,7 +1247,7 @@ GetData:
     ; go over to the next page:
     push hl
         ld hl,$bffd ; Highest safe value
-        ld d,b      ; ld de,bc...
+        ld d,b      ; ld de,bc..
         ld e,c
         or a        ; reset carry flag
         sbc hl,de   ; subtract value, if result is negative then it's unsafe
@@ -1271,10 +1271,10 @@ GetData:
     ; It's moving from $c000-n to VGMPagingBuffer+2-n
     push hl
         ld de,VGMPagingBuffer+2-$c000
-        ld h,b      ; ld hl,bc...
+        ld h,b      ; ld hl,bc..
         ld l,c
         add hl,de
-        ld b,h      ; ld bc,hl...
+        ld b,h      ; ld bc,hl..
         ld c,l
     pop hl
 */
@@ -1699,7 +1699,7 @@ DoINeedToWait:
       inc a
       daa
       ld (VGMTimeSecs),a
-      cp $60                  ; if it's at 60 seconds...
+      cp $60                  ; if it's at 60 seconds..
       jr nz,+
       xor a                ; zero the seconds
       ld (VGMTimeSecs),a
@@ -2446,8 +2446,8 @@ DrawPianoVis:
 .define NumSnowFlakes 32
 
 SnowText:
-.db 10,"  Dancing snow...",10,10
-.db "               ...with flashing",0
+.db 10,"  Dancing snow..",10,10
+.db "               ..with flashing",0
 
 InitSnow:
     push af
@@ -2551,7 +2551,7 @@ CalcSnow:
     ld a,(ix+0) ; get current value
     inc a       ; increment
     ld (ix+0),a ; that's what I want
-    cp $ff-$20  ; If it's time to change...
+    cp $ff-$20  ; If it's time to change..
     jr nz,+
     ; I want a new random x-pos
     call GetRandomNumber
@@ -2710,46 +2710,46 @@ Palettes:
 .db clRGB300,clRGB322,clRGB323  ; bright red
 
 TileData:
-.incbin "fonts\Verdana (tiles).pscompr"
+.incbin "fonts\Verdana.tiles.pscompr"
 
 BigNumbers:
-.incbin "Big numbers (tiles).pscompr"
+.incbin "BigNumbers.tiles.pscompr"
 
 Pad:
-.incbin "3D pad (tiles).pscompr"
+.incbin "3DPad.tiles.pscompr"
 
 PadData:
-.include "3D pad (tile numbers).inc"
+.include "3DPad.tilemap.inc"
 PadDataEnd:
-;.incbin "3D pad (tile numbers).pscompr"
+;.incbin "3DPad.tilemap.pscompr"
 
 ScaleData:
-.incbin "Scale (tiles).pscompr"
+.incbin "Scale.tiles.pscompr"
 
 TextData:
 .incbin "Text.txt"
 .db $00
 
 NoVGMText:
-.incbin "No VGM file message.txt"
+.incbin "no-vgm-file-message.txt"
 .db $00
 
 PianoTiles:
-.incbin "piano (tiles).pscompr"
+.incbin "piano.tiles.pscompr"
 
 PianoTileNumbers:
-.include "piano (tile numbers).inc"
+.include "piano.tilemap.inc"
 
 Sprites:
-.incbin "Sprites (tiles).pscompr"
+.incbin "Sprites.tiles.pscompr"
 
 .ifdef EasterEgg
 
 ETiles:
-.incbin "E (tiles).pscompr"
+.incbin "E.tiles.pscompr"
 
 ETileNumbers:
-.incbin "E (tile numbers).pscompr"
+.incbin "E.tilemap.pscompr"
 
 .endif
 
@@ -2864,10 +2864,10 @@ FadeOutPalette:
 .db clRGB010,clRGB121,clRGB232,clRGB333,clRGB222,clRGB111,clRGB000
 
 LogoTiles:
-.incbin "VGM logo (tiles).pscompr"
+.incbin "VGMLogo.tiles.pscompr"
 
 LogoTileNumbers:
-.incbin "VGM logo (tile numbers).pscompr"
+.incbin "VGMLogo.tilemap.pscompr"
 
 .ends
 
@@ -2914,7 +2914,7 @@ LoadSettings:
         ld c,_MarkerEnd-_Marker
         ld hl,_Marker
         ld ix,$8001
-        ; I have to do this one myself...
+        ; I have to do this one myself..
         -:
             ld a,(hl)   ; read ROM
             cp (ix+0)   ; compare to RAM
@@ -3013,6 +3013,6 @@ CheckPort3EValue:
 .bank 1 slot 1
 .orga $8000
 .section "VGM file" force
-.incbin "Aztec Adventure - Ending.vgm"
+.incbin "AztecAdventureEnding.vgm"
 .ends
 .endif
