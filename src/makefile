@@ -78,7 +78,7 @@ auto.makefile: smsvgmplayer.stub.asm
 
 # And then we build it
 %.o: 
-	$(WLAZ80) -D COMPRESSION=pscompr -o $@ $<
+	$(WLAZ80) -o $@ $<
 
 smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo [objects] > linkfile
@@ -86,13 +86,8 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 	$(WLALINK) -d -r -v -S linkfile $@
 
 clean:
-	del *.bin
-	del *.pscompr
-	del *.lsbtilemap
-	del *.1bpp
-	del *.palette
-	del *.sym
-	del wav\*.pcmenc
+	del art\*.pscompr
+	del art\*.inc
 	del smsvgmplayer.stub
 	del smsvgmplayer.stub.o
 	del auto.makefile

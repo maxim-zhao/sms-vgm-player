@@ -2713,18 +2713,18 @@ TileData:
 .incbin "fonts\Verdana.tiles.pscompr"
 
 BigNumbers:
-.incbin "BigNumbers.tiles.pscompr"
+.incbin "art\big-numbers.tiles.pscompr"
 
 Pad:
-.incbin "3DPad.tiles.pscompr"
+.incbin "art\3d-pad.tiles.pscompr"
 
 PadData:
-.include "3DPad.tilemap.inc"
+.include "art\3d-pad.tilemap.inc"
 PadDataEnd:
 ;.incbin "3DPad.tilemap.pscompr"
 
 ScaleData:
-.incbin "Scale.tiles.pscompr"
+.incbin "art\scale.tiles.pscompr"
 
 TextData:
 .incbin "Text.txt"
@@ -2735,21 +2735,21 @@ NoVGMText:
 .db $00
 
 PianoTiles:
-.incbin "piano.tiles.pscompr"
+.incbin "art\piano.tiles.pscompr"
 
 PianoTileNumbers:
-.include "piano.tilemap.inc"
+.include "art\piano.tilemap.inc"
 
 Sprites:
-.incbin "Sprites.tiles.pscompr"
+.incbin "art\sprites.tiles.pscompr"
 
 .ifdef EasterEgg
 
 ETiles:
-.incbin "E.tiles.pscompr"
+.incbin "art\e.tiles.pscompr"
 
 ETileNumbers:
-.incbin "E.tilemap.pscompr"
+.incbin "art\e.tilemap.pscompr"
 
 .endif
 
@@ -2864,10 +2864,10 @@ FadeOutPalette:
 .db clRGB010,clRGB121,clRGB232,clRGB333,clRGB222,clRGB111,clRGB000
 
 LogoTiles:
-.incbin "VGMLogo.tiles.pscompr"
+.incbin "art\vgm-logo.tiles.pscompr"
 
 LogoTileNumbers:
-.incbin "VGMLogo.tilemap.pscompr"
+.incbin "art\vgm-logo.tilemap.pscompr"
 
 .ends
 
