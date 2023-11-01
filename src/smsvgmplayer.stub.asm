@@ -9,41 +9,24 @@
 .define DoSplashScreen
 ;.define DoUnnecessaryDetection
 .define EasterEgg
-;.define TestFile
 ;.define Debug
 
 .macro NameTableAddressInHL args x, y
   ld hl,NameTableAddress+2*(x+y*32)
 .endm
 
-;==============================================================
 ; WLA-DX banking setup
-; Note that this is a frame 2-only setup, allowing large data
-; chunks in the first 32KB.
-;==============================================================
 .memorymap
 defaultslot 0
 slotsize $8000
 slot 0 $0000
-slotsize $4000
-slot 1 $8000
 .endme
 
-.ifdef TestFile
-.rombankmap
-bankstotal 2
-banksize $8000
-banks 1
-banksize $4000
-banks 1
-.endro
-.else
 .rombankmap
 bankstotal 1
 banksize $8000
 banks 1
 .endro
-.endif
 
 .bank 0 slot 0
 .org $0000
@@ -86,10 +69,7 @@ RandomSR                        dw ; Random number generator shift register, nee
 GD3DisplayerBuffer              dsb 33
 .ende
 
-;Useful defines and macros:
-.include "graphics.inc"
-
-.include "PhantasyStardecompressors.inc"
+.include "PhantasyStardecompressors.asm"
 
 .org $0000
 ;==============================================================
@@ -2566,7 +2546,9 @@ CalcSnow:
     pop af
     pop ix
     ret
-
+    
+.function colour(r,g,b) (r+(g<<2)+(b<<4))
+    
 UpdateSnow:
     push af
     push bc
@@ -2577,11 +2559,11 @@ UpdateSnow:
         and $0f
 ;        cp $0
         jr z,+
-        ; noise on
-        ld c,clRGB233
+        ; noise on -> light cyan
+        ld c,colour(2,3,3)
         jr ++
-      +:; noise off
-        ld c,clWhite
+      +:; noise off -> white
+        ld c,colour(3,3,3)
 
      ++:; Write colour to CRAM
         ld a,22                ; palette index 22
@@ -2695,19 +2677,20 @@ VdpDataEnd:
 ; My chosen palette
 ;==============================================================
 PaletteData:
-.db clRGB000,clRGB111,clRGB222,clRGB333,clRGB010,clRGB121,clRGB232,clRGB100,clRGB211,clRGB322,clRGB000,clRGB000,clRGB000,clRGB000,clRGB000,clRGB000
-.db clRGB303,clRGB000,clRGB110,clRGB310,clRGB321,clRGB330,clRGB333
+.incbin "art\big-numbers.palette"
+.dsb 6, 0
+.incbin "art\sprites.palette"
 PaletteDataEnd:
 
 .define NumPalettes 6
 
 Palettes:
-.db clRGB010,clRGB121,clRGB232  ; original (green)
-.db clRGB001,clRGB112,clRGB223  ; blue
-.db clRGB100,clRGB211,clRGB322  ; red
-.db clRGB023,clRGB223,clRGB233  ; light blue
-.db clRGB000,clRGB111,clRGB222  ; greyscale
-.db clRGB300,clRGB322,clRGB323  ; bright red
+.db colour(0,1,0),colour(1,2,2),colour(2,3,2)  ; original (green)
+.db colour(0,0,1),colour(1,1,2),colour(2,2,3)  ; blue
+.db colour(1,0,0),colour(2,1,1),colour(3,2,2)  ; red
+.db colour(0,2,3),colour(2,2,3),colour(2,3,3)  ; light blue
+.db colour(0,0,0),colour(1,1,1),colour(2,2,2)  ; greyscale
+.db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 TileData:
 .incbin "fonts\Verdana.tiles.pscompr"
@@ -2780,7 +2763,7 @@ DisplayVGMLogo:
     ld a,$c0
     out ($bf),a     ; CRAM write
     ld c,32
-    ld a,clWhite
+    ld a,colour(3,3,3)
     _WhiteLoop:
         out ($be),a
         dec c
@@ -2858,10 +2841,10 @@ DisplayVGMLogo:
 ;==============================================================
 
 LogoPalette:
-.db clLtGrey,clDkGrey,clBlack
+.db colour(2,2,2),colour(1,1,1),colour(0,0,0)
 
 FadeOutPalette:
-.db clRGB010,clRGB121,clRGB232,clRGB333,clRGB222,clRGB111,clRGB000
+.db colour(0,1,0),colour(1,2,1),colour(2,3,2),colour(3,3,3),colour(2,2,2),colour(1,1,1),colour(0,0,0)
 
 LogoTiles:
 .incbin "art\vgm-logo.tiles.pscompr"
@@ -3009,10 +2992,334 @@ CheckPort3EValue:
 
 .ends
 
-.ifdef TestFile
-.bank 1 slot 1
-.orga $8000
-.section "VGM file" force
-.incbin "AztecAdventureEnding.vgm"
+.section "PAL/NTSC detection" FREE
+;==============================================================
+; Speed detector
+; Returns a=1 for PAL, 0 for NTSC
+; MUST have standard screen size (not stretched)
+;==============================================================
+IsPAL:
+    push bc
+        call _GetNumber
+        ld bc,$02d2
+        sbc hl,bc       ; halfway between lowest and highest values found :P
+    pop bc
+    jp c,_IsNTSC
+    ld a,1
+    ret
+    _IsNTSC:
+    ld a,0
+    ret
+
+_GetNumber: ; returns counter in hl
+    _WaitForLine1:
+        call GetVCount
+        cp $01
+        jp nz,_WaitForLine1
+
+    ; Line 1, let's start counting while checking for line 0
+    ld hl,$0000
+    _WaitForLine0:
+        inc hl
+        call GetVCount
+        cp $00
+        jp nz,_WaitForLine0
+    ret
 .ends
-.endif
+
+;==============================================================
+; Clear VRAM
+;==============================================================
+.section "Clear VRAM" SEMIFREE
+ClearVRAM:
+    push hl
+    push bc
+    push af
+        ld hl,0
+        call VRAMToHL
+        ld bc, $4000    ; Counter for 16KB of VRAM
+        ld a,$00        ; Value to write
+        _Loop:
+            out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
+            dec c
+            jp nz,_Loop
+            dec b
+            jp nz,_Loop
+    pop af
+    pop bc
+    pop hl
+    ret
+.ends
+
+.section "Turn off screen" FREE
+TurnOffScreen:
+    push af
+        ld a,%10000100  ; 28 line mode
+        out ($bf),a
+        ld a,$81
+        out ($bf),a
+    pop af
+    ret
+.ends
+
+;==============================================================
+; Sprite disabler
+; Sets all sprites' Y-position to 208, thereby stopping display
+; of any more sprites than I've used
+;==============================================================
+.section "No sprites" FREE
+NoSprites:
+    push af
+    push bc
+    push hl
+        ld bc,64    ; how many sprites
+        ld hl,SpriteTableAddress
+        call VRAMToHL
+      -:ld a,208+16 ; for 28-line mode
+        out ($be),a
+        dec bc
+        ld a,b
+        or c
+        jp nz,-
+    pop hl
+    pop bc
+    pop af
+    ret
+.ends
+
+;==============================================================
+; Palette loader
+; Parameters:
+; hl = location
+; b  = number of values to write
+; c  = palette index to start at (<32)
+;==============================================================
+.section "Palette loader" FREE
+LoadPalette:
+	push af
+	push bc
+	push hl
+	    ld a,c
+	    out ($bf),a     ; Palette index
+	    ld a,$c0
+	    out ($bf),a     ; Palette write identifier
+	    ld c,$be
+	    otir            ; Output b bytes starting at hl to port c
+	pop hl
+	pop bc
+	pop af
+    ret
+.ends
+
+;==============================================================
+; Write ASCII text pointed to by hl to VRAM
+; Stops when it finds a null byte, skips control characters,
+; understands \n
+; Pass name table address in iy, it will be modified
+;==============================================================
+.section "Write ASCII" FREE
+VRAMToIY:
+    push hl
+    push iy
+    pop hl
+    call VRAMToHL
+    pop hl
+    ret
+
+WriteASCII:
+    push af
+    push bc
+    push hl
+        call VRAMToIY
+    	_WriteTilesLoop:
+		    ld a,(hl)	; Value to write
+		    cp $00		; compare a with $00, set z flag if they match
+		    jp z,_WriteTilesLoopEnd	; if so, it's the string end so stop writing it
+		    cp 10		; Check for LF
+		    jp z,_NewLine
+		    sub $20
+            jp c,_SkipControlChar
+		    out ($BE),a	; Output to VRAM address, which is auto-incremented after each write
+		    ld a,%00000000
+		    push hl
+		    pop hl  ; delay
+		    out ($BE),a
+            _SkipControlChar:
+		    inc hl
+		    jp _WriteTilesLoop
+	    _NewLine:
+		    ; Go to the next line, ie. next multiple of 32=$20
+            push hl
+                push iy
+                pop hl
+                ld bc,64
+                add hl,bc
+                push hl
+                pop iy
+                call VRAMToIY
+            pop hl
+            _NoNewLine:
+		    inc hl
+		    jp _WriteTilesLoop
+	    _WriteTilesLoopEnd:
+    pop hl
+    pop bc
+    pop af
+    ret
+.ends
+
+;==============================================================
+; Image loader (bytes)
+; Parameters:
+; b  = width  (tiles)
+; c  = height (tiles)
+; ix = location of tile number data (bytes)
+; iy = name table address of top-left tile
+; Sets all tile flags to zero.
+;==============================================================
+.section "Draw image" FREE
+DrawImageBytes:
+    push af
+    push bc     ; Width, height
+    push de     ; Width, height counters
+    push hl     ; h = high byte
+    push ix     ; ROM location
+    push iy     ; VRAM location
+        _DrawRow:
+            call VRAMToIY     ; Move to the right place
+            ld d,b                  ; no. of tiles to loop through per row
+            _DrawTile:
+                ld a,(ix+0)
+                out ($be),a
+                ld a,h
+                out ($be),a
+                inc ix
+                dec d
+                jp nz,_DrawTile
+
+            ld de,64                ; Move name table address
+            add iy,de
+
+            dec c
+            jp nz,_DrawRow
+    pop iy
+    pop ix
+    pop hl
+    pop de
+    pop bc
+    pop af
+    ret
+.ends
+
+;==============================================================
+; Set VRAM address to hl
+;==============================================================
+.section "VRAM address to hl" FREE
+VRAMToHL:
+    push af
+        ld a,l
+        out ($BF),a
+        ld a,h
+        or $40
+        out ($BF),a
+    pop af
+    ret
+.ends
+
+.section "Hex to BCD" FREE
+;==============================================================
+; Hex to BCD convertor
+; Inputs:  hex byte in a, should be <0x63
+; Outputs: BCD byte in a
+; Found in the middle of a Usenet flame war about whether daa
+; can be used to do such a conversion :)
+;==============================================================
+Hex2BCD:
+    push bc
+        ld b,a  ; Original (hex) number
+        ld c,8  ; How many bits
+        ld a,0  ; Output (BCD) number, starts at 0
+        _Hex2BCDLoop:
+            sla b   ; shift b into carry
+            adc a,a
+            daa     ; Decimal adjust a, so shift = BCD x2 plus carry
+            dec c   ; Repeat for 8 bits
+            jp nz,_Hex2BCDLoop
+    pop bc
+    ret
+.ends
+
+;==============================================================
+; Number writer
+; Writes hex byte in a to the screen
+;==============================================================
+.section "Write a to screen" FREE
+WriteNumber:    ; writes hex byte in a to VRAM
+    push af
+    push bc
+        ld b,a      ; back up a
+        ; Strip to digits:
+        ; Digit 1
+        srl a
+        srl a
+        srl a
+        srl a
+        call WriteDigit
+        ; Digit 2
+        ld a,b
+        and $f
+        call WriteDigit
+    pop bc
+    pop af
+    ret
+WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
+    push bc
+    push hl
+        ld b,$00
+        ld c,a
+        ld hl,NameTableAddress
+        add hl,bc
+        add hl,bc
+        add hl,bc
+        add hl,bc
+        call WriteNumber
+    pop hl
+    pop bc
+    ret
+
+WriteDigit:     ; writes the digit in a
+    cp $0a      ; compare it to A - if it's less then it's 0-9
+    jp c,IsNum
+        add a,$07   ; if it's >9 then make it point at A-F
+    IsNum:
+    add a,$10
+
+    out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
+    ld a,%00000000
+    out ($BE),a
+    ret
+
+WriteSpace:
+    push af
+        ld a,0
+        out ($be),a
+        out ($be),a
+    pop af
+    ret
+.ends
+
+.section "Get VCount" FREE
+;==============================================================
+; V Counter reader
+; Waits for 2 consecuitive identical values (to avoid garbage)
+; Returns in a *and* b
+;==============================================================
+GetVCount:  ; returns scanline counter in a and b
+    in a,($7e)  ; get value
+    _Loop:
+    ld b,a      ; store it
+    in a,($7e)  ; and again
+    cp b        ; Is it the same?
+    jr nz,_Loop ; If not, repeat
+    ret         ; If so, return it in a (and b)
+.ends

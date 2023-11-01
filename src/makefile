@@ -26,55 +26,8 @@ auto.makefile: smsvgmplayer.stub.asm
 %.tiles.pscompr: %.bmp
 	$(BMP2TILE) $< -noremovedupes -savetiles $@
 
-%.pcmenc: %
-	$(PCMENC) $< -p 4 -dt1 474 -dt2 11 -dt3 475 -rto 2 -cpuf 3546893 -smooth 10
-
-# 8x16 mode uncompressed, no tile dedupe
-%.8x16.bin: png/%.png
-	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
-
-# Uncompressed, no tile dedupe
-%.bin: png/%.png
-	$(BMP2TILE) $< -noremovedupes -savetiles $@
-
-# Uncompressed with tile dedupe
-%.bin: png/%.unoptimised.png
-	$(BMP2TILE) $< -removedupes -savetiles $@
-
-# Compressed, no tile dedupe, 8x16
-%.8x16.pscompr: png/%.png
-	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
-
-# Compressed, no tile dedupe
-%.pscompr: png/%.png
-	$(BMP2TILE) $< -noremovedupes -savetiles $@
-
-# Compressed with tile dedupe
-%.pscompr: png/%.unoptimised.png
-	$(BMP2TILE) $< -removedupes -savetiles $@
-
-# Tilemap with tile dedupe
-%.tilemap.bin: png/%.unoptimised.png
-	$(BMP2TILE) $< -removedupes -savetilemap $@
-
-# LSB tilemap with tile dedupe
-%.lsbtilemap: png/%.unoptimised.png
-	$(BMP2TILE) $< -removedupes -savetilemap $@
-
-# Tilemap without tile dedupe
-%.tilemap.bin: png/%.png
-	$(BMP2TILE) $< -noremovedupes -savetilemap $@
-
-# Palettes
-%.palette: png/%.png
-	$(BMP2TILE) $< -smspalette -fullpalette -savepalette $@
-
-%.palette: png/%.unoptimised.png
-	$(BMP2TILE) $< -smspalette -fullpalette -savepalette $@
-
-# 1bpp art, no tile dedupe
-%.1bpp: png/%.png
-	$(BMP2TILE) $< -noremovedupes -savetiles $@
+%.palette: %.bmp
+	$(BMP2TILE) $< -savepalette $@
 
 # And then we build it
 %.o: 

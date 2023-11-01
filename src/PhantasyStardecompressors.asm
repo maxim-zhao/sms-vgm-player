@@ -177,17 +177,6 @@ __:ld a,(hl)         ; Get data count in a <-----------------+
 ; This isn't from Phantasy Star; it's the tile routine modified for
 ; interleaving 2 instead of 4
 LoadTilemapToVRAM:
-/*  ld b,$02
--:push bc
-    push de
-      call _f ; called 4 times for 4 bitplanes
-    pop de
-    inc de
-  pop bc
-  djnz -
-  ret
-*/
-  ; unrolled:
   push de
     call _f
   pop de

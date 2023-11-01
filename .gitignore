@@ -8,3 +8,4 @@ linkfile
 *.pscompr
 *.o
 auto.makefile
+*.palette
