@@ -82,13 +82,6 @@ GD3DisplayerBuffer              dsb 33
   jr main         ; jump to main program
 .ends
 
-;  .db "Vis: "
-;  InitialVisNumber:
-;  .db 0
-;  .db " Colour: "
-;  InitialColourNumber:
-;  .db 0
-
 .org $10
 .macro GetByte
   rst $10
@@ -140,7 +133,7 @@ VGMPlayerVBlank:
 
   ld a,(VisChanged)
   cp 1
-  call z,InitialiseVisRoutine ; If the vis has changed then I need to do the initialisation in the vblank
+  call z,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
 
   ld hl,(VisDisplayRoutine)   ; Draw vis
   call callHL
@@ -192,6 +185,13 @@ main:
   ld b,VdpDataEnd-VdpData
   ld c,$bf
   otir
+  
+  ; Clear RAM
+  ld hl,$c000
+  ld de,$c001
+  ld bc,$1ff0
+  ld (hl),0
+  ldir
 
   call CheckPort3EValue
 
@@ -271,7 +271,7 @@ main:
 
   ; Load settings, initialise stuff
   call LoadSettings
-  call CyclePalette
+;  call CyclePalette
   call InitialiseVis
 
   ; Reset VGM player
@@ -1834,10 +1834,6 @@ PianoVisString:
 SnowVisString:
 .db 0
 
-InitialiseVis:  ; General vis initialisation
-    call InitialiseVisRoutine
-    ret
-
 NextVis:
     push af
         ld a,(VisNumber)
@@ -1847,14 +1843,14 @@ NextVis:
         xor a
         _NoWrap:
         ld (VisNumber),a
-        call InitialiseVisRoutine
+        call InitialiseVis
         ld a,1
         ld (VisChanged),a
     pop af
     call SaveSettings
     ret
 
-InitialiseVisRoutine:    ; Per-routine initialisation (runs in VBlank)
+InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
     push hl
     push de
     push iy
@@ -1862,7 +1858,11 @@ InitialiseVisRoutine:    ; Per-routine initialisation (runs in VBlank)
         call NoSprites
 
         ld a,(VisNumber)
-        sla a   ; a*2
+        ; Check range
+        cp NumVisRoutines
+        jr c,+
+        xor a ; zero if out of range
++:      sla a   ; a*2
         ld d,$00
         ld e,a
 
@@ -2678,7 +2678,6 @@ VdpDataEnd:
 ;==============================================================
 PaletteData:
 .incbin "art\big-numbers.palette"
-.dsb 6, 0
 .incbin "art\sprites.palette"
 PaletteDataEnd:
 
@@ -2702,9 +2701,7 @@ Pad:
 .incbin "art\3d-pad.tiles.pscompr"
 
 PadData:
-.include "art\3d-pad.tilemap.inc"
-PadDataEnd:
-;.incbin "3DPad.tilemap.pscompr"
+.incbin "art\3d-pad.lsbtilemap"
 
 ScaleData:
 .incbin "art\scale.tiles.pscompr"

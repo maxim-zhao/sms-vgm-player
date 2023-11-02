@@ -19,6 +19,12 @@ auto.makefile: smsvgmplayer.stub.asm
 # We want to build the resources automatically
 %.tilemap.inc: %.bmp
 	$(BMP2TILE) $< -savetilemap $@
+  
+art/3d-pad.lsbtilemap: art/3d-pad.bmp
+	$(BMP2TILE) $< -tileoffset 146 -savetilemap $@
+
+art/piano.tilemap.inc: art/piano.bmp
+	$(BMP2TILE) $< -tileoffset 256 -savetilemap $@
 
 %.tilemap.pscompr: %.bmp
 	$(BMP2TILE) $< -savetilemap $@
@@ -27,7 +33,7 @@ auto.makefile: smsvgmplayer.stub.asm
 	$(BMP2TILE) $< -savetiles $@
 
 %.palette: %.bmp
-	$(BMP2TILE) $< -savepalette $@
+	$(BMP2TILE) $< -fullpalette -savepalette $@
 
 # And then we build it
 %.o: 
@@ -36,7 +42,7 @@ auto.makefile: smsvgmplayer.stub.asm
 smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo [objects] > linkfile
 	echo $< >> linkfile
-	$(WLALINK) -d -r -v -s linkfile $@
+	$(WLALINK) -d -r -v -S linkfile $@
   
 test.sms: smsvgmplayer.stub vgm/tune2.vgm
 	copy /y /b smsvgmplayer.stub+vgm\tune2.vgm test.sms
@@ -45,6 +51,7 @@ test.sms: smsvgmplayer.stub vgm/tune2.vgm
 clean:
 	del art\*.pscompr
 	del art\*.inc
+	del art\*.palette
 	del smsvgmplayer.stub
 	del smsvgmplayer.stub.o
 	del auto.makefile
