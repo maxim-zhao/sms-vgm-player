@@ -1,4 +1,4 @@
-VGM player 0.92 BETA
+VGM player 0.94
 by Maxim
 
 :: To use ::
@@ -14,14 +14,16 @@ files.
 *** THE VGM FILE MUST BE DECOMPRESSED! ***
 I'm not about to port ZLib to the SMS. So, do one of these:
 1. Load the file in VGMTool and press the "Decompress VGZ" button
-2. Rename the file to filename.vgm.gz. Chances are, it'll open in WinZip
-   if you double-click on it.
+2. Rename the file to filename.vgm.gz. Open it in something like 7-Zip 
+   and extract it.
 
 Then open your .sms file in an emulator. Some low-quality or hacky
 emulators might have problems if you don't also pad the file to a power
-of 2 size (64KB, 128KB, etc).
+of 2 size (64KB, 128KB, etc). 
 
-Or, write it to a devcart and play it on a real SMS.
+Or, write it to a devcart and play it on a real SMS. You will have 
+trouble with Everdrive flash carts and clones if you don't pad to a 
+multiple of 64KB.
 
 :: Controls ::
 
@@ -49,7 +51,6 @@ between 50Hz and 60Hz modes.
 - An annoying bumper screen, which you can press a button to skip
 - Piano visualisation teaches you to play! Well, if you have 9
   super-fast hands maybe... (depending on the music)
-- An easter egg
 
 :: Limitations ::
 
@@ -61,7 +62,7 @@ between 50Hz and 60Hz modes.
 - The visualisations are not too intelligent, they just look at
   frequency and volume data and try to display it in a relatively simple
   way. So games doing strange stuff might visualise strangely. In
-  particular, periodic noise isn't handled properly (I tried).
+  particular, periodic noise isn't handled properly.
 - Most of the visualisations don't do FM. It's impossible to get volume
   envelope data for FM, which makes it tricky.
 - If you're playing a file at the opposite speed to which it was
@@ -146,7 +147,7 @@ SMS reference:    Richard Talbot-Watkins' document, Charles' documents
 
 Result:
 
-  7266 unused bytes of total 32768.
+  13231 bytes (40.38%) free of total 32768.
 
 
-Maxim 30/8/2009
+Maxim 2023/11/02

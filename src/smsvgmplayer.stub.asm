@@ -2090,9 +2090,11 @@ PianoVisInit:
         ld hl,VisLocation
         call VRAMToHL
         ld hl,PianoTileNumbers
+        ; We may run into the active display so output it slower than otir
         ld c,$be
         ld b,64*2
-        otir
+-:      outi
+        jr nz, -
         ; draw 2 blank lines
         xor a
         ld b,32*2*2
@@ -2112,12 +2114,18 @@ PianoVisInit:
         add hl,bc
         call VRAMToHL
         ld c,12
-      -:xor a              ; Hand x-position
+      -:xor a               ; Hand x-position
         out ($be),a
+        nop                 ; Slow down
+        nop
         ld a,$b0            ; Tile number (-$100 for spriteset 1)
         out ($be),a
+        nop
+        nop
         ld a,8
         out ($be),a
+        nop
+        nop
         ld a,$b3
         out ($be),a
         dec c
@@ -2381,6 +2389,10 @@ DrawPianoVis:
         ld b,NumHands
       -:ld a,(ix+1)     ; y-pos
         out ($be),a
+        nop
+        nop
+        nop
+        nop
         out ($be),a
         inc ix
         inc ix
