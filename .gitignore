@@ -9,3 +9,4 @@ linkfile
 *.o
 auto.makefile
 *.palette
+*.sav

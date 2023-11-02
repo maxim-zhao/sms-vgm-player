@@ -24,7 +24,7 @@ auto.makefile: smsvgmplayer.stub.asm
 	$(BMP2TILE) $< -savetilemap $@
 
 %.tiles.pscompr: %.bmp
-	$(BMP2TILE) $< -noremovedupes -savetiles $@
+	$(BMP2TILE) $< -savetiles $@
 
 %.palette: %.bmp
 	$(BMP2TILE) $< -savepalette $@
@@ -36,7 +36,11 @@ auto.makefile: smsvgmplayer.stub.asm
 smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo [objects] > linkfile
 	echo $< >> linkfile
-	$(WLALINK) -d -r -v -S linkfile $@
+	$(WLALINK) -d -r -v -s linkfile $@
+  
+test.sms: smsvgmplayer.stub vgm/tune2.vgm
+	copy /y /b smsvgmplayer.stub+vgm\tune2.vgm test.sms
+	copy /y smsvgmplayer.sym test.sym
 
 clean:
 	del art\*.pscompr

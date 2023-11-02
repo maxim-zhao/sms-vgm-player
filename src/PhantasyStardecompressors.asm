@@ -196,7 +196,7 @@ __:
   ld a,c             ; set z flag if high   |
   and $80            ; bit = 0              |
                      ;                      |
--:di                 ;                      |
+-:;di                 ;                      |
 .ifdef UseRst        ; SetVRAMAddressToDE<+ |
   rst $08            ;                    | |
 .else                ;                    | |
@@ -204,7 +204,7 @@ __:
 .endif               ;                    | |
   ld a,(hl)          ; Get data byte in a | |
   out ($be),a        ; Write it to VRAM   | |
-  ei
+  ;ei
   jr z,+             ; If z flag then  -+ | |
                      ; skip inc hl      | | |
   inc hl             ;                  | | |

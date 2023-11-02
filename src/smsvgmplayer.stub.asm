@@ -8,7 +8,7 @@
 
 .define DoSplashScreen
 ;.define DoUnnecessaryDetection
-.define EasterEgg
+;.define EasterEgg
 ;.define Debug
 
 .macro NameTableAddressInHL args x, y
@@ -47,7 +47,7 @@ SDSCNotes:
 ;==============================================================
 ; Memory usage
 ;==============================================================
-.enum $c000
+.enum $c000 export
 Port3EValue                     db
 VGMMemoryStart                  ds 256
 ButtonState                     db
@@ -2747,7 +2747,8 @@ SplashScreenVBlank:
     cp  %00111111
     ret z
     ; I want to jump elsewhere
-    ; I think this is some almight kludge I invented?
+    ; I think this is some almighty kludge I invented?
+    ; TODO fix this horror
     inc sp
     inc sp
     inc sp
