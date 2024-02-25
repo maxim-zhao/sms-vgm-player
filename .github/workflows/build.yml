@@ -16,12 +16,12 @@ jobs:
       run: |
         Invoke-WebRequest -Uri https://github.com/maxim-zhao/sms-build-tools/releases/download/1.0.357/tools.7z -OutFile tools.7z
         7z x tools.7z -otools
+        Add-Content $env:GITHUB_PATH "$((Get-Item .\tools).FullName)"
 
     - name: build
       shell: cmd
       working-directory: src
       run: |
-        path %cd%\tools;%path%
         where make
         make --help
         where wla-z80
