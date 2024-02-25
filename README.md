@@ -5,7 +5,7 @@ This is a "stub" which is able to play VGM files on the Sega Master System. Thes
 
 It is only able to play back music composed for the sound chips it has: the Sega PSG and the YM2413. It also requires you to decompress the VGM file (if it is compressed; most are) and apped it to the ROM.
 
-![Screenshot](screenshots\screenshot1.png)
+![Screenshot](screenshots/screenshot1.png)
 
 If you have trouble with playback, try:
 
