@@ -32,6 +32,9 @@ art/piano.tilemap.inc: art/piano.bmp
 %.tiles.pscompr: %.bmp
 	$(BMP2TILE) $< -savetiles $@
 
+%.tiles.withdupes.pscompr: %.bmp
+	$(BMP2TILE) $< -noremovedupes -savetiles $@
+
 %.palette: %.bmp
 	$(BMP2TILE) $< -fullpalette -savepalette $@
 
@@ -44,8 +47,8 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo $< >> linkfile
 	$(WLALINK) -d -r -v -S linkfile $@
   
-test.sms: smsvgmplayer.stub vgm/tune2.vgm
-	copy /y /b smsvgmplayer.stub+vgm\tune2.vgm test.sms
+test.sms: smsvgmplayer.stub test.vgm
+	copy /y /b smsvgmplayer.stub+test.vgm+test.vgm test.sms
 	copy /y smsvgmplayer.sym test.sym
 
 clean:

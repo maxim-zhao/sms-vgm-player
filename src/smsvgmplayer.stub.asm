@@ -6,25 +6,23 @@
 .define NameTableAddress    $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define DoSplashScreen
+;.define DoSplashScreen
 ;.define DoUnnecessaryDetection
-;.define EasterEgg
 ;.define Debug
 
-.macro NameTableAddressInHL args x, y
-  ld hl,NameTableAddress+2*(x+y*32)
-.endm
+.function TilemapAddress(x, y) NameTableAddress+2*(x+y*32) 
+.function colour(r,g,b) (r+(g<<2)+(b<<4))
 
 ; WLA-DX banking setup
 .memorymap
 defaultslot 0
-slotsize $8000
+slotsize $4000
 slot 0 $0000
 .endme
 
 .rombankmap
 bankstotal 1
-banksize $8000
+banksize $4000
 banks 1
 .endro
 
@@ -49,10 +47,10 @@ SDSCNotes:
 ;==============================================================
 .enum $c000 export
 Port3EValue                     db
-VGMMemoryStart                  ds 256
+VGMMemoryStart                  dsb 256
 ButtonState                     db
 LastButtonState                 db
-VisBuffer                       ds 64
+VisBuffer                       dsb 64
 VisNumber                       db
 IsPalConsole                    db
 IsJapConsole                    db
@@ -83,10 +81,8 @@ GD3DisplayerBuffer              dsb 33
 .ends
 
 .org $10
-.macro GetByte
-  rst $10
-.endm
-.section "!GetByte" force
+.section "GetByte" force
+GetByte:
   ; get byte (easy)
   ld a,(bc)
   ; increment address (hard)
@@ -100,7 +96,7 @@ GD3DisplayerBuffer              dsb 33
     inc a
     call z,VGMStop ; give up at page $100(!)
     ld ($ffff),a
-    ld bc,$8000
+    ld b,$80 ; wrap to $8000
   pop af
   ret
 .ends
@@ -173,8 +169,13 @@ VGMPlayerVBlank:
 ; Main program
 ;==============================================================
 main:
-  ld a,$02
+  xor a
+  ld ($fffd),a
+  inc a
+  ld ($fffe),a
   ld ($ffff),a
+
+  call TurnOffScreen
 
   ; Load VDP with default values, thanks to Mike G :P
   ; hl = address of data
@@ -187,9 +188,9 @@ main:
   otir
   
   ; Clear RAM
-  ld hl,$c000
-  ld de,$c001
-  ld bc,$1ff0
+  ld hl,$c000+1
+  ld de,$c000+2
+  ld bc,$1ff0-1
   ld (hl),0
   ldir
 
@@ -209,7 +210,6 @@ main:
 .ifdef DoSplashScreen
   call ClearVRAM
   call DisplayVGMLogo
-  call TurnOffScreen
 .endif
   call ClearVRAM
   call NoSprites
@@ -253,14 +253,14 @@ main:
   ld (ButtonState),a
 
   ; Draw text
-  ld iy,NameTableAddress
+  ld iy,TilemapAddress(0, 0)
   ld hl,TextData
   call WriteASCII
 
   ; Draw pad image
   ld bc,$0c0b     ; 12x11
   ld ix,PadData
-  ld iy,NameTableAddress+2*20
+  ld iy,TilemapAddress(18, 1)
   ld h,0
   call DrawImageBytes
 
@@ -279,15 +279,15 @@ main:
 
 .ifdef Debug
   ; Debug: show detected information
-  NameTableAddressInHL 0, 24
+  ld hl, TilemapAddress(0, 24)
   call VRAMToHL
   ld a,(IsJapConsole)
   call WriteNumber
-  NameTableAddressInHL 0, 25
+  ld hl, TilemapAddress(0, 25)
   call VRAMToHL
   ld a,(IsPalConsole)
   call WriteNumber
-  NameTableAddressInHL 0, 26
+  ld hl, TilemapAddress(0, 26)
   call VRAMToHL
   ld a,(FMChipDetected)
   call WriteNumber
@@ -339,7 +339,7 @@ InfiniteLoop:   ; to stop the program
 ; hl = offset ($8000-$bfff)
 ; * If dword is zero then a will be zero to show that
 ;==============================================================
-.section "VGM to SMS offset" SEMIFREE
+.section "VGM to SMS offset" free
 VGMOffsetToPageAndOffset:
   push ix
   push bc
@@ -350,7 +350,7 @@ VGMOffsetToPageAndOffset:
     ; Page in the first page, remembering the current page on the stack
     ld a,($ffff)
     push af
-      ld a,$02
+      ld a,$01
       ld ($ffff),a
 
       ; offset of dword in .sms -> ix
@@ -390,7 +390,7 @@ _NonZero:
       rla
       sla b
       rla
-      add a,2
+      inc a ; VGM stub is one page
       ld c,a
 
       ; And then get the offset by modding by $4000 and adding $8000
@@ -412,7 +412,7 @@ _end:
   ret
 .ends
 
-.section "Draw GD3" SEMIFREE
+.section "Draw GD3" free
 MoveHLForwardByA:
   ; Adds A to HL
   ; If it goes over $c000, it handles the paging
@@ -462,8 +462,6 @@ DrawGD3Tag:
   push bc
   push af
     ; Page in first page
-    ld a,$02
-    ld ($ffff),a
     ld a,$14 ; offset of GD3 tag location
     call VGMOffsetToPageAndOffset   ; a = page or 0, hl = offset
 
@@ -595,7 +593,7 @@ ShowTime:
       ; get digits
       ld de,(VGMTimeMins)     ; d = sec  e = min
       ; Set start name table address
-      NameTableAddressInHL 2, 6
+      ld hl, TilemapAddress(2, 6)
       ; Output digit(s)
       ld b,e
       call DrawByte
@@ -623,7 +621,7 @@ ShowLoopNumber:
     push hl
       ld a,(VGMLoopsPlayed)
       ld b,a
-      NameTableAddressInHL 13, 6
+      ld hl, TilemapAddress(13, 6)
       call DrawByte
       xor a
       ld (LoopsChanged),a
@@ -774,7 +772,7 @@ CyclePalette:
 ; VGM routines
 ;==============================================================
 
-.section "VGM routines" SEMIFREE
+.section "VGM routines" free
 ; VGM routines memory mapping:
 .enum VGMMemoryStart
 VGMCounterLocation      dw      ; 00-01 VGM data pointer
@@ -843,16 +841,20 @@ Divide16:
   ret
   
 IsVGMFileAtOffset:  ; pass offset in ix, uses a, sets z if file found
-  push ix
-    ld a,(ix+0) ; V
-    rrca
-    xor (ix+1)  ; g
-    rrca
-    xor (ix+2)  ; m
-    rrca
-    xor (ix+3)  ; <space>
-    cp $85 ; should come to this
-  pop ix
+  push bc
+    rst GetByte
+    cp 'V'
+    jr nz,_fail
+    rst GetByte
+    cp 'g'
+    jr nz,_fail
+    rst GetByte
+    cp 'm'
+    jr nz,_fail
+    rst GetByte
+    cp ' '
+_fail:
+  pop bc
   ret
 
 ;==============================================================
@@ -862,11 +864,13 @@ VGMInitialise:
   push hl
   push af
     ; Check for VGM marker
-    ld ix,$8000
+    ld bc,$8000
     call IsVGMFileAtOffset
     jp nz,NoVGMFile
 
     ; Get lengths
+    push bc
+    pop ix
     ld h,(ix+27)    ; Total
     ld l,(ix+26)
     ld b,(ix+25)
@@ -883,7 +887,7 @@ VGMInitialise:
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
     push hl
-      NameTableAddressInHL 10, 9
+      ld hl, TilemapAddress(10, 9)
       call VRAMToHL
     pop hl
     ld a,c
@@ -914,7 +918,7 @@ VGMInitialise:
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
     push hl
-      NameTableAddressInHL 10, 10
+      ld hl, TilemapAddress(10, 10)
       call VRAMToHL
     pop hl
     ld a,c
@@ -940,14 +944,14 @@ VGMInitialise:
     or a
     jr nz,+
     ; defaults
-    ld a,2
+    ld a,1
     ld hl,$8040
 +:  ld (VGMStartPage),a
     ld (VGMStartOffset),hl
 
     ; Draw GD3 tag
     push iy
-      ld iy,NameTableAddress+(32*18+1)*2  ; GD3 location
+      ld iy,TilemapAddress(1,18) ; GD3 location
       call DrawGD3Tag
     pop iy
 
@@ -1000,8 +1004,11 @@ _Stop:
     ld a,VGMStopped
     ld (VGMPlayerState),a
 
-    ; Switch to first page
-    ld a,(VGMStartPage)
+    ; Initialise mapper
+    xor a
+    ld ($fffd),a
+    inc a
+    ld ($fffe),a
     ld ($ffff),a
 
     ; Move pointer to the start of the VGM data
@@ -1182,13 +1189,13 @@ GetData:
     push af
     push hl
       ld a,b
-      NameTableAddressInHL 3, 25
+      ld hl, TilemapAddress(3, 25)
       call VRAMToHL
       call WriteNumber
       ld a,c
       call WriteNumber
       ld a,($ffff);
-      NameTableAddressInHL 3, 26
+      ld hl, TilemapAddress(3, 26)
       call VRAMToHL
       call WriteNumber
     pop hl
@@ -1259,7 +1266,7 @@ GetData:
     pop hl
 */
 ReadData:
-    GetByte
+    rst GetByte
 .ifdef Debug
     ; Debug display of information
 ;    call WriteNumberEx
@@ -1305,13 +1312,13 @@ ReadData:
 ; fall through
 
 Unhandled4Bytes:
-    GetByte
+    rst GetByte
 Unhandled3Bytes:
-    GetByte
+    rst GetByte
 Unhandled2Bytes:
-    GetByte
+    rst GetByte
 Unhandled1Byte:
-    GetByte
+    rst GetByte
     jr GetData
 
 WaitSmallN:
@@ -1332,19 +1339,19 @@ YM2612SampleWithWait:
 
 DataBlock:
     ; skip next byte (compatibility byte)
-    GetByte
+    rst GetByte
     ; skip next byte (block type)
-    GetByte
+    rst GetByte
     ; read in block size (32 bits)
     push de
     push hl
-      GetByte
+      rst GetByte
       ld e,a
-      GetByte
+      rst GetByte
       ld d,a
-      GetByte
+      rst GetByte
       ld l,a
-      GetByte
+      rst GetByte
       ld h,a
       ; hlde = block size
       ; we need to skip it
@@ -1385,12 +1392,12 @@ DataBlock:
     jp GetData
 
 GameGearStereo: ; discard
-    GetByte
+    rst GetByte
 ;    out ($06),a ; output stereo data :( crashes a real SMS(2)
     jp GetData
 
 PSG:
-    GetByte
+    rst GetByte
     out ($7f),a ; output it
 
     ; Data analysis:
@@ -1502,9 +1509,9 @@ _PSGAnalysisEnd:
 
 WaitNSamples:
     ; get number
-    GetByte
+    rst GetByte
     ld e,a  ; read into e then d (big-endian)
-    GetByte
+    rst GetByte
     ld d,a
     ; fall through
 
@@ -1537,11 +1544,11 @@ EndOfFile:
     jp GetData
 
 YM2413:
-    GetByte
+    rst GetByte
     out ($f0),a
     ld e,a      ; e = register
 
-    GetByte
+    rst GetByte
     out ($f1),a
     ld d,a      ; d = data
 
@@ -1611,8 +1618,8 @@ _2x:    ; FNum high bit/block/key
     jp GetData
 /*
 YMxxxx: ; discard 2 bytes
-    GetByte
-    GetByte
+    rst GetByte
+    rst GetByte
     jp GetData
 */
 
@@ -1624,7 +1631,7 @@ DoINeedToWait:
 .ifdef Debug
     ; Debug display of information (wait total)
     push hl
-      NameTableAddressInHL 3, 24
+      ld hl, TilemapAddress(3, 24)
       call VRAMToHL
     pop hl
     ld a,h
@@ -1720,10 +1727,10 @@ EndGetDataLoop:
 ; No VGM file - does not return
 ; Maybe add a picture here?
 ;==============================================================
-.section "No VGM file" SEMIFREE
+.section "No VGM file" free
 _ClearScreen:
     ; Clear the screen
-    ld hl,NameTableAddress
+    ld hl,TilemapAddress(0,0)
     call VRAMToHL
     ld bc,$700
     xor a
@@ -1738,12 +1745,12 @@ NoVGMFile:
     call _ClearScreen
 
     ; Display a message
-    ld iy,NameTableAddress
+    ld iy,TilemapAddress(0,0)
     ld hl,NoVGMText
     call WriteASCII
 /*
     ; Debug: display what we've found
-    ld hl,NameTableAddress
+    ld hl,TilemapAddress(0,0)
     call VRAMToHL
     ld c,160
     ld hl,$8000
@@ -1760,51 +1767,17 @@ NoVGMFile:
     ld a,$81
     out ($bf),a
 
-  -:
-.ifdef EasterEgg
-    in a,($dc)
-    cp %11001110 ; check for U+1+2
-    jr z,_EasterEgg
-.endif
+  -:halt
     jr -
 
-.ifdef EasterEgg
-_EasterEgg:
-    call _ClearScreen
-
-    ; Main screen turn off
-    ld a,%10000000
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
-
-    ; load tiles
-    ld de,$4000
-    ld hl,ETiles
-    call LoadTiles4BitRLENoDI
-
-    ; load tilemap
-    ld de,$4000+$3800
-    ld hl,ETileNumbers
-    call LoadTilemapToVRAM
-
-    ; Main screen turn on
-    ld a,%11000000
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
-
-    ; stop
-  -:jr -
-.endif
 
 .ends
 
 ;==============================================================
 ; Visualisation routines
 ;==============================================================
-.section "Visualisations" SEMIFREE
-.define VisLocation NameTableAddress+2*(32*12)
+.section "Visualisations" free
+.define VisLocation TilemapAddress(0,12)
 
 .define NumVisRoutines 5
 
@@ -2558,9 +2531,7 @@ CalcSnow:
     pop af
     pop ix
     ret
-    
-.function colour(r,g,b) (r+(g<<2)+(b<<4))
-    
+        
 UpdateSnow:
     push af
     push bc
@@ -2704,7 +2675,7 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 TileData:
-.incbin "fonts\Verdana.tiles.pscompr"
+.incbin "fonts\ZXChicagoPod.tiles.withdupes.pscompr"
 
 BigNumbers:
 .incbin "art\big-numbers.tiles.pscompr"
@@ -2735,17 +2706,7 @@ PianoTileNumbers:
 Sprites:
 .incbin "art\sprites.tiles.pscompr"
 
-.ifdef EasterEgg
-
-ETiles:
-.incbin "art\e.tiles.pscompr"
-
-ETileNumbers:
-.incbin "art\e.tilemap.pscompr"
-
-.endif
-
-.section "VGM logo displayer" SEMIFREE
+.section "VGM logo displayer" free
 ;==============================================================
 ; Code
 ;==============================================================
@@ -2784,7 +2745,7 @@ DisplayVGMLogo:
     ld hl,LogoTiles
     call LoadTiles4BitRLENoDI
 
-    ld hl,NameTableAddress+2*(32*0+1)
+    ld hl,TilemapAddress(0,1)
     call VRAMToHL
 
     ; Draw tiles
@@ -3040,7 +3001,7 @@ _GetNumber: ; returns counter in hl
 ;==============================================================
 ; Clear VRAM
 ;==============================================================
-.section "Clear VRAM" SEMIFREE
+.section "Clear VRAM" free
 ClearVRAM:
     push hl
     push bc

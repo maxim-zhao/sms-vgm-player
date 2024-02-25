@@ -13,11 +13,11 @@
 
       (all on one line)
  where:
- ± vgmplayer.stub is the 32KB
+ ± vgmplayer.stub is the 16KB
    player file
  ± vgmfile.vgm is an
    UNCOMPRESSED VGM file
  ± output.sms is the combined
    file which will be created
 
-  http://www.smspower.org/music
+  http://www.smspower.org/Music

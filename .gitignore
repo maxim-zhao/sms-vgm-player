@@ -11,3 +11,5 @@ auto.makefile
 *.palette
 *.sav
 *.lsbtilemap
+
+*.db
