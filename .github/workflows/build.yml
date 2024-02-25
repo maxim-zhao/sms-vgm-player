@@ -21,11 +21,7 @@ jobs:
     - name: build
       shell: cmd
       working-directory: src
-      run: |
-        where make
-        make --help
-        where wla-z80
-        make -j
+      run: make -j
 
     - uses: actions/upload-artifact@v1
       with:
