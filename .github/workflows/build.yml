@@ -20,7 +20,9 @@ jobs:
     - name: build
       shell: cmd
       working-directory: src
-      run: make -j
+      run: |
+        path %cd%\tools;%path%
+        make -j
 
     - uses: actions/upload-artifact@v1
       with:
