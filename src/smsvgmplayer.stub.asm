@@ -213,6 +213,7 @@ main:
   call HasFMChip
   xor a
   ld (FMChipDetected),a
+  call nz,EnableFM
 
   ; Startup screen
   call ClearVRAM
@@ -1076,11 +1077,18 @@ MuteAllSound:
     ld c,$20
     ld b,6
     ld hl,VGMYM2413Keys
--:  ld a,c
-    out ($f0),a
-    ld a,(hl)
-    res 4,a
-    out ($f1),a
+-:  ld a,(Port3EValue)
+    set 2,a
+    out ($3e),a
+      ld a,c
+      out ($f0),a
+      ld a,(hl)
+      res 4,a
+      push hl
+      pop hl
+      out ($f1),a
+    ld a,(Port3EValue)
+    out ($3e),a
     inc c
     inc hl
     djnz -
@@ -1101,12 +1109,19 @@ RestoreVolumes:
     ld hl,VGMYM2413Keys
     ld c,$20
     ld b,6
--:  ld a,c
-    out ($f0),a
-    ld a,(hl)
-    res 4,a
-    res 5,a
-    out ($f1),a
+-:  ld a,(Port3EValue)
+    set 2,a
+    out ($3e),a
+      ld a,c
+      out ($f0),a
+      ld a,(hl)
+      res 4,a
+      res 5,a
+      push hl
+      pop hl ; delay
+      out ($f1),a
+    ld a,(Port3EValue)
+    out ($3e),a
     inc hl
     inc c
     djnz -
@@ -1549,14 +1564,19 @@ EndOfFile:
     jp GetData
 
 YM2413:
-    rst GetByte
-    out ($f0),a
-    ld e,a      ; e = register
+    ld a,(Port3EValue)
+    set 2,a
+    out ($3e),a
+      rst GetByte
+      out ($f0),a
+      ld e,a      ; e = register
 
-    rst GetByte
-    out ($f1),a
-    ld d,a      ; d = data
-
+      rst GetByte ; Delay needed?
+      out ($f1),a
+      ld d,a      ; d = data
+    ld a,(Port3EValue)
+    out ($3e),a
+    
     ; Analyse the register
     ld a,e
     and $f0
@@ -2925,6 +2945,7 @@ CheckPort3EValue:
 .ends
 
 .section "FM enable" free
+EnableFM:
 ; FM hardware enabled by setting bit 0 of port $f2
 ; Port $3E:
 ; 1 = disable, 0 = enable
@@ -2943,7 +2964,8 @@ CheckPort3EValue:
   set 2,a ; set bit 2 to disable the I/O chip
   out ($3e),a
 
-  ld a,1
+  ; https://www.smspower.org/Development/AudioControlPort
+  ld a,$03
   out ($f2),a
 
   ; enable I/O chip
