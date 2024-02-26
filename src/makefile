@@ -46,9 +46,11 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo [objects] > linkfile
 	echo $< >> linkfile
 	$(WLALINK) -d -r -v -S linkfile $@
-  
+
+# To guarantee at least 64KB, we copy three stubs on the end(!)
+# Else Emulicious won't emulate a mapper
 test.sms: smsvgmplayer.stub test.vgm
-	copy /y /b smsvgmplayer.stub+test.vgm+test.vgm test.sms
+	copy /y /b smsvgmplayer.stub+test.vgm+smsvgmplayer.stub+smsvgmplayer.stub+smsvgmplayer.stub test.sms
 	copy /y smsvgmplayer.sym test.sym
 
 clean:

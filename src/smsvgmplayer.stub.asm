@@ -8,7 +8,7 @@
 
 ;.define DoSplashScreen
 ;.define DoUnnecessaryDetection
-;.define Debug
+.define Debug
 
 .function TilemapAddress(x, y) NameTableAddress+2*(x+y*32) 
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
@@ -32,7 +32,7 @@ banks 1
 ;==============================================================
 ; SDSC tag and SMS rom header
 ;==============================================================
-.sdsctag 0.93,"SMS VGM player",SDSCNotes,"Maxim"
+.sdsctag 0.94,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
 ;    123456789012345678901234567890123456789012345678901234567890123
@@ -69,6 +69,8 @@ GD3DisplayerBuffer              dsb 33
 
 .include "PhantasyStardecompressors.asm"
 
+.define PAGING_SLOT_2 $ffff
+
 .org $0000
 ;==============================================================
 ; Boot section
@@ -92,10 +94,10 @@ GetByte:
   ; bc is >$cx (presuming this is the only place it is changed)
   ; so flip to the next page
   push af
-    ld a,($ffff)
+    ld a,(PAGING_SLOT_2)
     inc a
     call z,VGMStop ; give up at page $100(!)
-    ld ($ffff),a
+    ld (PAGING_SLOT_2),a
     ld b,$80 ; wrap to $8000
   pop af
   ret
@@ -183,7 +185,7 @@ main:
   ; c = port
   ; otir = while (b>0) do {out (hl),c; b--}
   ld hl,VdpData
-  ld b,VdpDataEnd-VdpData
+  ld b,_sizeof_VdpData
   ld c,$bf
   otir
   
@@ -216,7 +218,7 @@ main:
 
   ; Load palette
   ld hl,PaletteData
-  ld b,(PaletteDataEnd-PaletteData)
+  ld b,_sizeof_PaletteData
   ld c,0
   call LoadPalette
 
@@ -348,10 +350,10 @@ VGMOffsetToPageAndOffset:
     ld c,a
 
     ; Page in the first page, remembering the current page on the stack
-    ld a,($ffff)
+    ld a,(PAGING_SLOT_2)
     push af
-      ld a,$01
-      ld ($ffff),a
+      ld a,1
+      ld (PAGING_SLOT_2),a
 
       ; offset of dword in .sms -> ix
       ld b,$80
@@ -402,7 +404,7 @@ _NonZero:
 _end:
     ; Restore original page
     pop af
-    ld ($ffff),a
+    ld (PAGING_SLOT_2),a
 
     ; Output a=page number
     ld a,c
@@ -428,9 +430,9 @@ MoveHLForwardByA:
   ; Need to decrement by $4000
   res 6,h
   ; and page in the next page
-  ld a,($ffff)
+  ld a,(PAGING_SLOT_2)
   inc a
-  ld ($ffff),a
+  ld (PAGING_SLOT_2),a
   ret
 
 MoveHLForward:
@@ -445,9 +447,9 @@ MoveHLForward:
     ; Need to decrement by $4000
     res 6,h
     ; and page in the next page
-    ld a,($ffff)
+    ld a,(PAGING_SLOT_2)
     inc a
-    ld ($ffff),a
+    ld (PAGING_SLOT_2),a
     _OK2:
   pop af
   ret
@@ -470,7 +472,7 @@ DrawGD3Tag:
     jr z,_NoGD3
 
     ; Page it in
-    ld ($ffff),a
+    ld (PAGING_SLOT_2),a
 
     ; Move to first string
     ld a,12
@@ -739,7 +741,7 @@ CyclePalette:
   ld a,(PaletteNumber)
   inc a
   ; Loop
-  cp NumPalettes
+  cp _sizeof_Palettes/3
   jr nz,+
   xor a
 +:ld (PaletteNumber),a
@@ -2654,7 +2656,7 @@ VdpData:
 ;    ``------- Vertical scroll
 .db $ff,$8a
 ;    ``------- Line interrupt spacing ($ff to disable)
-VdpDataEnd:
+
 
 ;==============================================================
 ; My chosen palette
@@ -2662,11 +2664,9 @@ VdpDataEnd:
 PaletteData:
 .incbin "art\big-numbers.palette"
 .incbin "art\sprites.palette"
-PaletteDataEnd:
-
-.define NumPalettes 6
 
 Palettes:
+.db colour(0,1,2),colour(1,2,3),colour(2,3,3)
 .db colour(0,1,0),colour(1,2,2),colour(2,3,2)  ; original (green)
 .db colour(0,0,1),colour(1,1,2),colour(2,2,3)  ; blue
 .db colour(1,0,0),colour(2,1,1),colour(3,2,2)  ; red
@@ -2828,7 +2828,6 @@ LogoTileNumbers:
 .section "Save/load settings in BBRAM" FREE
 _Marker:
 .db "VGM"
-_MarkerEnd:
 
 SaveSettings:
     push af
@@ -2838,7 +2837,7 @@ SaveSettings:
         ld a,%00001000  ; select BBRAM
         ld ($fffc),a
         ; write marker
-        ld bc,_MarkerEnd-_Marker
+        ld bc,_sizeof__Marker
         ld hl,_Marker
         ld de,$8001
         ldir
@@ -2865,7 +2864,7 @@ LoadSettings:
         ld a,%00001000  ; select BBRAM
         ld ($fffc),a
         ; Check marker
-        ld c,_MarkerEnd-_Marker
+        ld c,_sizeof__Marker
         ld hl,_Marker
         ld ix,$8001
         ; I have to do this one myself..
@@ -3067,18 +3066,18 @@ NoSprites:
 ;==============================================================
 .section "Palette loader" FREE
 LoadPalette:
-	push af
-	push bc
-	push hl
-	    ld a,c
-	    out ($bf),a     ; Palette index
-	    ld a,$c0
-	    out ($bf),a     ; Palette write identifier
-	    ld c,$be
-	    otir            ; Output b bytes starting at hl to port c
-	pop hl
-	pop bc
-	pop af
+    push af
+    push bc
+    push hl
+        ld a,c
+        out ($bf),a     ; Palette index
+        ld a,$c0
+        out ($bf),a     ; Palette write identifier
+        ld c,$be
+        otir            ; Output b bytes starting at hl to port c
+    pop hl
+    pop bc
+    pop af
     ret
 .ends
 
@@ -3102,24 +3101,24 @@ WriteASCII:
     push bc
     push hl
         call VRAMToIY
-    	_WriteTilesLoop:
-		    ld a,(hl)	; Value to write
-		    cp $00		; compare a with $00, set z flag if they match
-		    jp z,_WriteTilesLoopEnd	; if so, it's the string end so stop writing it
-		    cp 10		; Check for LF
-		    jp z,_NewLine
-		    sub $20
+        _WriteTilesLoop:
+            ld a,(hl)    ; Value to write
+            cp $00        ; compare a with $00, set z flag if they match
+            jp z,_WriteTilesLoopEnd    ; if so, it's the string end so stop writing it
+            cp 10        ; Check for LF
+            jp z,_NewLine
+            sub $20
             jp c,_SkipControlChar
-		    out ($BE),a	; Output to VRAM address, which is auto-incremented after each write
-		    ld a,%00000000
-		    push hl
-		    pop hl  ; delay
-		    out ($BE),a
+            out ($BE),a    ; Output to VRAM address, which is auto-incremented after each write
+            ld a,%00000000
+            push hl
+            pop hl  ; delay
+            out ($BE),a
             _SkipControlChar:
-		    inc hl
-		    jp _WriteTilesLoop
-	    _NewLine:
-		    ; Go to the next line, ie. next multiple of 32=$20
+            inc hl
+            jp _WriteTilesLoop
+        _NewLine:
+            ; Go to the next line, ie. next multiple of 32=$20
             push hl
                 push iy
                 pop hl
@@ -3130,9 +3129,9 @@ WriteASCII:
                 call VRAMToIY
             pop hl
             _NoNewLine:
-		    inc hl
-		    jp _WriteTilesLoop
-	    _WriteTilesLoopEnd:
+            inc hl
+            jp _WriteTilesLoop
+        _WriteTilesLoopEnd:
     pop hl
     pop bc
     pop af
