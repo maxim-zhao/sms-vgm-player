@@ -6,8 +6,6 @@
 .define NameTableAddress    $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-;.define DoSplashScreen
-;.define DoUnnecessaryDetection
 .define Debug
 
 .function TilemapAddress(x, y) NameTableAddress+2*(x+y*32) 
@@ -127,7 +125,7 @@ VGMPlayerVBlank:
 
   ld a,(PaletteChanged)
   cp 1
-  call z,CyclePalette ; must do CRAM writes in VBlank
+  call z,NextPalette ; must do CRAM writes in VBlank
 
   ld a,(VisChanged)
   cp 1
@@ -178,6 +176,16 @@ main:
   ld ($ffff),a
 
   call TurnOffScreen
+  
+  ; Black palette
+  xor a
+  out ($bf),a
+  ld a,$c0
+  out ($bf),a
+  ld b,32
+  xor a
+-:out ($be),a
+  djnz -
 
   ; Load VDP with default values, thanks to Mike G :P
   ; hl = address of data
@@ -200,19 +208,13 @@ main:
 
   call IsPAL
   ld (IsPalConsole),a
-.ifdef DoUnnecessaryDetection
   call IsJapanese
   ld (IsJapConsole),a
   call HasFMChip
   xor a
   ld (FMChipDetected),a
-.endif
 
   ; Startup screen
-.ifdef DoSplashScreen
-  call ClearVRAM
-  call DisplayVGMLogo
-.endif
   call ClearVRAM
   call NoSprites
 
@@ -273,7 +275,7 @@ main:
 
   ; Load settings, initialise stuff
   call LoadSettings
-;  call CyclePalette
+  call UpdatePalette
   call InitialiseVis
 
   ; Reset VGM player
@@ -281,15 +283,15 @@ main:
 
 .ifdef Debug
   ; Debug: show detected information
-  ld hl, TilemapAddress(0, 24)
+  ld hl, TilemapAddress(3, 24)
   call VRAMToHL
   ld a,(IsJapConsole)
   call WriteNumber
-  ld hl, TilemapAddress(0, 25)
+  ld hl, TilemapAddress(3, 25)
   call VRAMToHL
   ld a,(IsPalConsole)
   call WriteNumber
-  ld hl, TilemapAddress(0, 26)
+  ld hl, TilemapAddress(3, 26)
   call VRAMToHL
   ld a,(FMChipDetected)
   call WriteNumber
@@ -736,7 +738,7 @@ ProcessInput:   ; Outside of VBlank, process what was read above
   pop hl
   ret
 
-CyclePalette:
+NextPalette:
   ; increment palette number
   ld a,(PaletteNumber)
   inc a
@@ -745,8 +747,12 @@ CyclePalette:
   jr nz,+
   xor a
 +:ld (PaletteNumber),a
+  call SaveSettings
+
+UpdatePalette:
   ; Load palette
   ld hl,Palettes
+  ld a,(PaletteNumber)
   ; multiply a by 3 and add it to hl
   ld b,0
   ld c,a
@@ -759,15 +765,12 @@ CyclePalette:
   ld c,4
   call LoadPalette
   ld b,1      ; border colour
-  ld c,31
+  ld c,16
   call LoadPalette
 
   ; reset flag
   xor a
   ld (PaletteChanged),a
-
-  call SaveSettings
-
   ret
 
 ;==============================================================
@@ -1191,13 +1194,13 @@ GetData:
     push af
     push hl
       ld a,b
-      ld hl, TilemapAddress(3, 25)
+      ld hl, TilemapAddress(18, 24)
       call VRAMToHL
       call WriteNumber
       ld a,c
       call WriteNumber
-      ld a,($ffff);
-      ld hl, TilemapAddress(3, 26)
+      ld a,(PAGING_SLOT_2)
+      ld hl, TilemapAddress(15, 24)
       call VRAMToHL
       call WriteNumber
     pop hl
@@ -1633,7 +1636,7 @@ DoINeedToWait:
 .ifdef Debug
     ; Debug display of information (wait total)
     push hl
-      ld hl, TilemapAddress(3, 24)
+      ld hl, TilemapAddress(11, 25)
       call VRAMToHL
     pop hl
     ld a,h
@@ -2648,7 +2651,7 @@ VdpData:
 .db (NameTableAddress>>10) |%11110001,$82
 .db (SpriteTableAddress>>7)|%10000001,$85
 .db (SpriteSet<<2)         |%11111011,$86
-.db $f|$f0,$87
+.db $0|$f0,$87
 ;    `-------- Border palette colour (sprite palette)
 .db $00,$88
 ;    ``------- Horizontal scroll
@@ -2663,7 +2666,8 @@ VdpData:
 ;==============================================================
 PaletteData:
 .incbin "art\big-numbers.palette"
-.incbin "art\sprites.palette"
+.db 0 ; black border
+.incbin "art\sprites.palette" skip 1
 
 Palettes:
 .db colour(0,1,2),colour(1,2,3),colour(2,3,3)
@@ -2882,14 +2886,12 @@ LoadSettings:
         ld a,($8004)
         ld (VisNumber),a
         ld a,($8005)
-        dec a
         ld (PaletteNumber),a
         jr ++
         
         _Error:
         xor a
         ld (VisNumber),a
-        ld a,-1
         ld (PaletteNumber),a
 
         ++:
@@ -3293,3 +3295,84 @@ GetVCount:  ; returns scanline counter in a and b
     jr nz,_Loop ; If not, repeat
     ret         ; If so, return it in a (and b)
 .ends
+
+.section "Japanese/Export detection" FREE
+;==============================================================
+; Region detector
+; Returns a=1 for Japanese, 0 for export
+; I got conflicting/not working information from various
+;  sources so I disassembled a game and ripped out its routine.
+;==============================================================
+IsJapanese:
+    ; Relevant ports:
+    ; 3f: 76543210  Joypad port output
+    ;     |||||||`- P1 B2 input enable
+    ;     ||||||`-- P1 TH input enable
+    ;     |||||`--- P2 B2 input enable
+    ;     ||||`---- P2 TH input enable
+    ;     |||`----- P1 B2 output
+    ;     ||`------ P1 TH output
+    ;     |`------- P2 B2 output
+    ;      `------- P2 TH output
+    ;   Explanation:
+    ;   If the input bit is 1, the connection is an input as normal.
+    ;   If it's 0 then the output bit is output by the connection.
+    ;   On Export systems, you read back the current output; on Japanese, it is the user input.
+    ; dd: 76543210  Joypad port input 2
+    ;     || ||||`- P1 L
+    ;     || |||`-- P1 R
+    ;     || ||`--- P2 B1
+    ;     || |`---- P2 B2
+    ;     || `----- Reset
+    ;     |`------- P1 TH
+    ;      `------- P2 TH
+    ;   Important: active low, so 1 = off
+
+    ; Test 1:
+    ld a,%11110101  ; Set both TH to output and output 1s
+    out ($3f),a
+    in a,($dd)
+    and  %11000000  ; See what the TH inputs are
+    cp   %11000000  ; If the bits are not 1 then it's definitely Japanese
+    jp nz,_IsJap
+
+    ld a,%01010101  ; Set both TH to output and output 0s
+    out ($3f),a
+    in a,($dd)
+    and %11000000  ; See what the TH inputs are
+    jp nz,_IsJap    ; If the bits are not 0 then it's definitely Japanese
+
+    ld a,%11111111  ; Set everything back to being inputs
+    out ($3f),a
+
+    xor a
+    ret
+
+    _IsJap:
+    ld a,1
+    ret
+.ends
+
+.section "FM detection" FREE
+;==============================================================
+; FM detector
+; Returns a=1 for FM chip found, 0 otherwise
+;==============================================================
+HasFMChip:
+    ; If there's an FM chip I should be able to modify $f2
+    push bc
+        in a,($f2)      ; Get what's there
+        ld b,a
+        xor %00000001   ; Toggle bit 0
+        out ($f2),a     ; Write it out
+        in a,($f2)      ; Read it back
+        cp b
+    pop bc    
+    jp z,_NoFM
+    ld a,1
+    ret
+    _NoFM:
+    ld a,0
+    ret
+.ends
+
