@@ -1,9 +1,9 @@
+
    SMS VGM player
    v0.94 by Maxim
 
- Video Game Music
-
   Time       Loop
+
       ±
       ±
 
