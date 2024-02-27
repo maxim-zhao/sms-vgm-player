@@ -151,12 +151,12 @@ VGMPlayerVBlank:
   SetDebugColour(2,0,0)
 
   ld a,(PaletteChanged)
-  cp 1
-  call z,NextPalette ; must do CRAM writes in VBlank
+  or a
+  call nz,NextPalette ; must do CRAM writes in VBlank
 
   ld a,(VisChanged)
-  cp 1
-  call z,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
+  or a
+  call nz,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
 
   ld hl,(VisDisplayRoutine)   ; Draw vis
   SetDebugColour(3,0,0)
@@ -508,20 +508,26 @@ DrawGD3Tag:
     jr z,_NoGD3
 
     ; Page it in
+    ld b,a
+    ld a,(PAGING_SLOT_2)
+    push af
+      ld a,b
+      ld (PAGING_SLOT_2),a
+
+      ; Move to first string
+      ld a,12
+      call MoveHLForwardByA
+
+      ld a,2
+      call _DrawGD3String ; Title
+      call _SkipGD3String
+      call _DrawGD3String ; Game
+      call _SkipGD3String
+      call _DrawGD3String ; System
+      call _SkipGD3String
+      call _DrawGD3String ; Author
+    pop af
     ld (PAGING_SLOT_2),a
-
-    ; Move to first string
-    ld a,12
-    call MoveHLForwardByA
-
-    ld a,2
-    call _DrawGD3String ; Title
-    call _SkipGD3String
-    call _DrawGD3String ; Game
-    call _SkipGD3String
-    call _DrawGD3String ; System
-    call _SkipGD3String
-    call _DrawGD3String ; Author
 
     jr _end
 
@@ -1861,70 +1867,61 @@ SnowVisString:
 .db 0
 
 NextVis:
-    push af
-        ld a,(VisNumber)
-        inc a
-        cp NumVisRoutines
-        jr nz,_NoWrap
-        xor a
-        _NoWrap:
-        ld (VisNumber),a
-        call InitialiseVis
-        ld a,1
-        ld (VisChanged),a
-    pop af
+  push af
+    ld a,(VisNumber)
+    inc a
+    cp NumVisRoutines
+    jr nz,_NoWrap
+    xor a
+    _NoWrap:
+    ld (VisNumber),a
+    ld a,1
+    ld (VisChanged),a
     call SaveSettings
-    ret
+  pop af
+  ret
 
 InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
-    push hl
+    call NoSprites
+
+    ld a,(VisNumber)
+    ; Check range
+    cp NumVisRoutines
+    jr c,+
+    xor a ; zero if out of range
++:  add a,a ; a *= 2
+    ld d,0
+    ld e,a
+
+    ld iy,VisRoutinesStrings    ; Get location of string
+    add iy,de
+    ld h,(iy+1)
+    ld l,(iy+0)
+    ld iy,VisLocation+32*2*4    ; Where to draw it
+    call WriteASCII             ; Draw it
+
+    ld iy,VisInitRoutines       ; Do initialisation
+    add iy,de
+    ld h,(iy+1)
+    ld l,(iy+0)
     push de
-    push iy
-    push bc
-        call NoSprites
-
-        ld a,(VisNumber)
-        ; Check range
-        cp NumVisRoutines
-        jr c,+
-        xor a ; zero if out of range
-+:      sla a   ; a*2
-        ld d,0
-        ld e,a
-
-        ld iy,VisRoutinesStrings    ; Get location of string
-        add iy,de
-        ld h,(iy+1)
-        ld l,(iy+0)
-        ld iy,VisLocation+32*2*4    ; Where to draw it
-        call WriteASCII             ; Draw it
-
-        ld iy,VisInitRoutines       ; Do initialisation
-        add iy,de
-        ld h,(iy+1)
-        ld l,(iy+0)
-        push de
-          call callHL
-        pop de
-
-        ld iy,VisDisplayRoutines    ; Update VBlank routine
-        add iy,de
-        ld b,(iy+1)
-        ld c,(iy+0)
-        ld (VisDisplayRoutine),bc
-
-        ld iy,VisRoutines           ; and non-VBlank routine
-        add iy,de
-        ld b,(iy+1)
-        ld c,(iy+0)
-        ld (VisRoutine),bc
-
-        xor a                      ; Reset flag
-        ld (VisChanged),a
-    pop bc
-    pop iy
+      call callHL
     pop de
-    pop hl
+
+    ld iy,VisDisplayRoutines    ; Update VBlank routine
+    add iy,de
+    ld b,(iy+1)
+    ld c,(iy+0)
+    ld (VisDisplayRoutine),bc
+
+    ld iy,VisRoutines           ; and non-VBlank routine
+    add iy,de
+    ld b,(iy+1)
+    ld c,(iy+0)
+    ld (VisRoutine),bc
+
+    xor a                      ; Reset flag
+    ld (VisChanged),a
     ret
 
 UpdateVis:
@@ -3263,6 +3260,8 @@ WriteDigit:     ; writes the digit in a
     add a,$10
 
     out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
+    push hl
+    pop hl
     ld a,%00000000
     out ($BE),a
     ret
@@ -3365,6 +3364,9 @@ HasFMChip:
       out (PORT_AUDIO_CONTROL),a     ; Write it out
       in a,(PORT_AUDIO_CONTROL)      ; Read it back
       cp b
+      ; Write a 0 at the end to be in PSG mode
+      ld a,0
+      out (PORT_AUDIO_CONTROL),a
     ld a,(Port3EValue)
     set 2,a
     out (PORT_MEMORY_CONTROL),a
