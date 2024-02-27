@@ -61,7 +61,7 @@ Port3EValue                     db
 VGMMemoryStart                  dsb 256
 ButtonState                     db
 LastButtonState                 db
-VisBuffer                       dsb 64
+VisBuffer                       dsb 256 ; Visualisers can do as they wish with this
 VisNumber                       db
 IsPalConsole                    db
 IsJapConsole                    db
@@ -294,7 +294,7 @@ main:
   ; Draw pad image
   ld bc,$0c0b     ; 12x11
   ld ix,PadData
-  ld iy,TilemapAddress(18, 1)
+  ld iy,TilemapAddress(19, 1)
   ld h,0
   call DrawImageBytes
 
@@ -1197,7 +1197,7 @@ _NoLooping:
     jr _EndVGMDoLoop
 
 _IsLooping:
-    ld ($ffff),a            ; Page
+    ld (PAGING_SLOT_2),a            ; Page
     ld bc,(VGMLoopOffset)   ; offset
     ld a,(VGMLoopsPlayed)
     inc a
@@ -1228,7 +1228,7 @@ GetData:
     and VGMPlaying
     jp z,EndGetDataLoop        ; if we're not playing then exit
 
-.ifdef Debug
+.ifdef Debugx
     ; Debug display of information (location/page)
     push af
     push hl
@@ -1245,70 +1245,7 @@ GetData:
     pop hl
     pop af
 .endif
-/*
-    ; Paging handler:
-    ; First check to see if I've already moved to reading from RAM:
-    ld de,VGMPagingBuffer
-    push hl
-        ld h,b      ; ld hl,bc..
-        ld l,c
-        or a        ; reset carry flag
-        sbc hl,de   ; subtract value, if result is negative then it's not in RAM
-        ld a,l      ; for comparison if I am in RAM (1)
-    pop hl
-    jr c,NotInRAM
-    ; If I am in RAM then see if I'm more than 2 bytes in
-    cp 2            ; (1)
-    jr c,ReadData   ; if negative then I'm not there yet
-    ; otherwise, move back to ROM
-    push hl
-        ld de,VGMPagingBuffer-$8000+2
-        ld h,b      ; ld hl,bc..
-        ld l,c
-        or a        ; reset carry flag (hmmph! doing this a lot)
-        sbc hl,de
-        ld b,h      ; ld bc,hl..
-        ld c,l
-    pop hl
-    jr ReadData
 
-
-    NotInRAM:
-    ; If I'm too close to the end of a page (<3 bytes) the next instruction might
-    ; go over to the next page:
-    push hl
-        ld hl,$bffd ; Highest safe value
-        ld d,b      ; ld de,bc..
-        ld e,c
-        or a        ; reset carry flag
-        sbc hl,de   ; subtract value, if result is negative then it's unsafe
-    pop hl
-    jr c,DoPagingThing
-    jr ReadData
-
-    DoPagingThing:
-    ; So, I'll copy the last 2 bytes of this page, and the first 2 bytes of the
-    ; next, into RAM and continue from there:
-    ld de,($bffe)
-    ld (VGMPagingBuffer),de
-    ; Now change page:
-    ld a,($ffff)
-    inc a
-    ld ($ffff),a
-    ; Now copy the first 2 bytes to my buffer:
-    ld de,($8000)
-    ld (VGMPagingBuffer+2),de
-    ; And move the data pointer to the buffer
-    ; It's moving from $c000-n to VGMPagingBuffer+2-n
-    push hl
-        ld de,VGMPagingBuffer+2-$c000
-        ld h,b      ; ld hl,bc..
-        ld l,c
-        add hl,de
-        ld b,h      ; ld bc,hl..
-        ld c,l
-    pop hl
-*/
 ReadData:
     rst GetByte
 .ifdef Debug
@@ -1423,10 +1360,10 @@ DataBlock:
       ld b,h
       ld c,l
       ; page in the new page
-      ld a,($ffff)
+      ld a,(PAGING_SLOT_2)
       add a,e
       call c,_Stop ; bail if past the addressable range
-      ld ($ffff),a
+      ld (PAGING_SLOT_2),a
       ; check on d - if non-zero then we still need to bail
       ld a,d
       or a
@@ -1687,7 +1624,7 @@ DoINeedToWait:
     ; If hl>=FrameLength then subtract FrameLength and exit loop
     ; otherwise loop
 
-.ifdef Debug
+.ifdef Debugx
     ; Debug display of information (wait total)
     push hl
       ld hl, TilemapAddress(11, 25)
@@ -1841,13 +1778,13 @@ NoVGMFile:
 .define NumVisRoutines 5
 
 VisRoutines:        ; calculation for vis, done after data is processed
-.dw PianoVis,       FrequencyVis,   VolumeVis,      CalcSnow,       NoRoutine
+.dw PianoVis,       FrequencyVis,         VolumeVis,            CalcSnow,       NoRoutine
 
 VisDisplayRoutines: ; VBlank display update
-.dw DrawPianoVis,   DrawVisBuffer,  DrawVisBuffer,  UpdateSnow,     NoRoutine
+.dw DrawPianoVis,   DrawVisBufferAsBars,  DrawVisBufferAsBars,  UpdateSnow,     NoRoutine
 
 VisInitRoutines:    ; Initialisation
-.dw PianoVisInit,   NoRoutine,      NoRoutine,      InitSnow,       NoVisInit
+.dw PianoVisInit,   NoRoutine,            NoRoutine,            InitSnow,       NoVisInit
 
 NoRoutine:
     ret
@@ -1947,7 +1884,7 @@ UpdateVis:
 
 ClearBuffer:   ; uses a,bc,de,hl
     ; Clear VisBuffer to all 0
-    ld bc,64-1
+    ld bc,_sizeof_VisBuffer-1
     ld hl,VisBuffer
     ld de,VisBuffer+1
     xor a
@@ -1955,7 +1892,7 @@ ClearBuffer:   ; uses a,bc,de,hl
     ldir
     ret
 
-DrawVisBuffer:
+DrawVisBufferAsBars:
 ; Draw first 32 entries of VisBuffer as vertical bars of height == value
     ld hl,VisLocation
     call VRAMToHL
@@ -2075,6 +2012,7 @@ PianoVisInit:
     push af
     push bc
     push hl
+        call ClearBuffer
         ; Draw tiles
         ld hl,VisLocation
         call VRAMToHL
@@ -2348,15 +2286,20 @@ DrawPianoVis:
     ; Set sprite positions accordingly
 
     .define NumHands 9
-    push af
-    push bc
-    push ix
-    push hl
+;    push af
+;    push bc
+;    push ix
+;    push hl
 
         ld c,$be    ; VDP port
 
         ld hl,SpriteTableAddress
         call VRAMToHL
+        
+        ld a,(VisBuffer+20)
+        xor 1
+        ld (VisBuffer+20),a
+        jr nz,_reverse
 
         ld ix,VisBuffer
 
@@ -2388,7 +2331,7 @@ DrawPianoVis:
             nop     ;  4
             nop     ;  4
             nop     ;  4 = 31
-                in a,($be)  ; skip #
+            in a,($be)  ; skip #
             pop af  ; 10
             add a,8 ;  7
             nop     ;  4
@@ -2402,15 +2345,66 @@ DrawPianoVis:
             inc ix  ; 10
             inc ix  ; 10
             jr nz,- ; 10 = 53 :P
-    pop hl
-    pop ix
-    pop bc
-    pop af
+;    pop hl
+;    pop ix
+;    pop bc
+;    pop af
+    ret
+
+_reverse:
+        ld ix,VisBuffer+NumHands*2-2
+
+        ld b,NumHands
+      -:ld a,(ix+1)     ; y-pos
+        out ($be),a
+        nop
+        nop
+        nop
+        nop
+        out ($be),a
+        dec ix
+        dec ix
+        dec b
+        jr nz,-
+
+        ld bc,128
+        add hl,bc
+        call VRAMToHL
+
+        ld ix,VisBuffer+NumHands*2-2
+        ld b,NumHands   ; How many hands to draw
+        -:
+            ld a,(ix+0) ; 19
+            out ($be),a ; x-pos
+            push af ; 11
+            nop     ;  4
+            nop     ;  4
+            nop     ;  4
+            nop     ;  4
+            nop     ;  4 = 31
+            in a,($be)  ; skip #
+            pop af  ; 10
+            add a,8 ;  7
+            nop     ;  4
+            nop     ;  4
+            nop     ;  4 = 29
+            out ($be),a ; x-pos
+            push ix ; 15
+            pop ix  ; 14 = 29
+            in a,($be)  ; skip #
+            dec b   ;  4
+            dec ix  ; 10
+            dec ix  ; 10
+            jr nz,- ; 10 = 53 :P
+;    pop hl
+;    pop ix
+;    pop bc
+;    pop af
     ret
 
 NoVisInit:
   call ClearBuffer
-  call DrawVisBuffer
+  call DrawVisBufferAsBars
   ret
 
 .define NumSnowFlakes 32
