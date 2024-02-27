@@ -11,6 +11,19 @@
 .function TilemapAddress(x, y) NameTableAddress+2*(x+y*32) 
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
 
+.macro SetDebugColour(r,g,b)
+  .ifdef Debug
+    push af
+      ld a,$10
+      out ($bf),a
+      ld a,$c0
+      out ($bf),a
+      ld a,colour(r,g,b)
+      out ($be),a
+    pop af
+  .endif
+.endm
+
 ; WLA-DX banking setup
 .memorymap
 defaultslot 0
@@ -53,6 +66,7 @@ VisNumber                       db
 IsPalConsole                    db
 IsJapConsole                    db
 FMChipDetected                  db
+FMChipEnabled                   db
 VBlankRoutine                   dw
 VisRoutine                      dw ; Routine to calculate vis
 VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
@@ -67,7 +81,11 @@ GD3DisplayerBuffer              dsb 33
 
 .include "PhantasyStardecompressors.asm"
 
+.define PAGING_SLOT_0 $fffd
+.define PAGING_SLOT_1 $fffe
 .define PAGING_SLOT_2 $ffff
+.define PORT_MEMORY_CONTROL $3e
+.define PORT_AUDIO_CONTROL $f2
 
 .org $0000
 ;==============================================================
@@ -106,10 +124,15 @@ GetByte:
 ; Interrupt handler
 ;==============================================================
 .section "!Interrupt handler" FORCE
-  in a,($bf)      ; satisfy interrupt
-  ; No checking of the value because I know I only have VBlank interrupts
-  ld hl,(VBlankRoutine)
-  call callHL
+  ex af,af'
+  exx
+    in a,($bf)      ; satisfy interrupt
+    ; No checking of the value because I know I only have VBlank interrupts
+    ld hl,(VBlankRoutine)
+    call callHL
+  exx
+  ex af,af'
+  ei
   reti
 
 callHL:
@@ -117,11 +140,15 @@ callHL:
 
 NoVBlank:
   ret
+.ends
 
+.section "VGM Player vblank" free
 VGMPlayerVBlank:
+  SetDebugColour(1,0,0)
   call CheckInput ; Read input into memory
   call ShowTime   ; Update time display
   call ShowLoopNumber
+  SetDebugColour(2,0,0)
 
   ld a,(PaletteChanged)
   cp 1
@@ -132,7 +159,9 @@ VGMPlayerVBlank:
   call z,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
 
   ld hl,(VisDisplayRoutine)   ; Draw vis
+  SetDebugColour(3,0,0)
   call callHL
+  SetDebugColour(0,0,0)
 
   ret
 .ends
@@ -170,10 +199,10 @@ VGMPlayerVBlank:
 ;==============================================================
 main:
   xor a
-  ld ($fffd),a
+  ld (PAGING_SLOT_0),a
   inc a
-  ld ($fffe),a
-  ld ($ffff),a
+  ld (PAGING_SLOT_1),a
+  ld (PAGING_SLOT_2),a
 
   call TurnOffScreen
   
@@ -211,9 +240,9 @@ main:
   call IsJapanese
   ld (IsJapConsole),a
   call HasFMChip
-  xor a
   ld (FMChipDetected),a
-  call nz,EnableFM
+  xor a
+  ld (FMChipEnabled),a
 
   ; Startup screen
   call ClearVRAM
@@ -325,13 +354,17 @@ main:
   call VGMUpdate
   */
 
-InfiniteLoop:   ; to stop the program
   ei
+InfiniteLoop:   ; to stop the program
   halt
+  SetDebugColour(0,1,0)
   call VGMUpdate      ; Write sound data
+  SetDebugColour(0,2,0)
   call ProcessInput   ; Process input from the last VBlank
+  SetDebugColour(0,3,0)
   ld hl,(VisRoutine)  ; Update vis data
   call callHL
+  SetDebugColour(0,0,0)
 
   jr InfiniteLoop
 
@@ -588,30 +621,22 @@ _LoopEnd:
 ; Time displayer
 ;==============================================================
 ShowTime:
-  push af
-    ld a,(SecondsChanged)
-    or a
-    jr z,+
-    push bc
-    push de
-    push hl
-      ; get digits
-      ld de,(VGMTimeMins)     ; d = sec  e = min
-      ; Set start name table address
-      ld hl, TilemapAddress(2, 6)
-      ; Output digit(s)
-      ld b,e
-      call DrawByte
-      ld bc,6
-      add hl,bc
-      ld b,d
-      call DrawByte
-      xor a
-      ld (SecondsChanged),a
-    pop hl
-    pop de
-    pop bc
-+:pop af
+  ld a,(SecondsChanged)
+  or a
+  ret z
+  ; get digits
+  ld de,(VGMTimeMins)     ; d = sec  e = min
+  ; Set start name table address
+  ld hl, TilemapAddress(2, 6)
+  ; Output digit(s)
+  ld b,e
+  call DrawByte
+  ld bc,6
+  add hl,bc
+  ld b,d
+  call DrawByte
+  xor a
+  ld (SecondsChanged),a
   ret
 
 ;==============================================================
@@ -1010,13 +1035,6 @@ _Stop:
     ld a,VGMStopped
     ld (VGMPlayerState),a
 
-    ; Initialise mapper
-    xor a
-    ld ($fffd),a
-    inc a
-    ld ($fffe),a
-    ld ($ffff),a
-
     ; Move pointer to the start of the VGM data
     ld hl,(VGMStartOffset)
     ld (VGMCounterLocation),hl
@@ -1079,7 +1097,7 @@ MuteAllSound:
     ld hl,VGMYM2413Keys
 -:  ld a,(Port3EValue)
     set 2,a
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
       ld a,c
       out ($f0),a
       ld a,(hl)
@@ -1088,7 +1106,7 @@ MuteAllSound:
       pop hl
       out ($f1),a
     ld a,(Port3EValue)
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
     inc c
     inc hl
     djnz -
@@ -1111,7 +1129,7 @@ RestoreVolumes:
     ld b,6
 -:  ld a,(Port3EValue)
     set 2,a
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
       ld a,c
       out ($f0),a
       ld a,(hl)
@@ -1121,7 +1139,7 @@ RestoreVolumes:
       pop hl ; delay
       out ($f1),a
     ld a,(Port3EValue)
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
     inc hl
     inc c
     djnz -
@@ -1547,12 +1565,12 @@ _WaitDESamples:
     inc a
     ld (VGMWaitTotalOverflow),a
 
-    jr DoINeedToWait
+    jp DoINeedToWait
 
 Wait160th:  ; add 735 to the total number of samples
     ld de,735
     add hl,de
-    jr DoINeedToWait
+    jp DoINeedToWait
 
 Wait150th:  ; add 882 to the total number of samples
     ld de,882
@@ -1566,7 +1584,7 @@ EndOfFile:
 YM2413:
     ld a,(Port3EValue)
     set 2,a
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
       rst GetByte
       out ($f0),a
       ld e,a      ; e = register
@@ -1575,7 +1593,7 @@ YM2413:
       out ($f1),a
       ld d,a      ; d = data
     ld a,(Port3EValue)
-    out ($3e),a
+    out (PORT_MEMORY_CONTROL),a
     
     ; Analyse the register
     ld a,e
@@ -1637,6 +1655,16 @@ _2x:    ; FNum high bit/block/key
       ld c,e
       add hl,bc
       ld (hl),d
+      
+      ; If a YM2413 key down is seen, we want to enable FM.
+      ; We only do it here because some VGMs may have FM initialisation, but enabling FM would mute PSG on a Mark III.
+      ld a,d
+      or a
+      jr z,+
+      ld a,(FMChipEnabled)
+      or a
+      jr nz,+
+      call EnableFM
 
 +:  pop hl
     pop bc
@@ -1806,14 +1834,14 @@ NoVGMFile:
 
 .define NumVisRoutines 5
 
-VisRoutines:        ; calculation for vis
+VisRoutines:        ; calculation for vis, done after data is processed
 .dw PianoVis,       FrequencyVis,   VolumeVis,      CalcSnow,       NoRoutine
 
 VisDisplayRoutines: ; VBlank display update
-.dw DrawPianoVis,   DrawVisBuffer,  DrawVisBuffer,  UpdateSnow,     DrawVisBuffer
+.dw DrawPianoVis,   DrawVisBuffer,  DrawVisBuffer,  UpdateSnow,     NoRoutine
 
 VisInitRoutines:    ; Initialisation
-.dw PianoVisInit,   NoRoutine,      NoRoutine,      InitSnow,       ClearBuffer
+.dw PianoVisInit,   NoRoutine,      NoRoutine,      InitSnow,       NoVisInit
 
 NoRoutine:
     ret
@@ -1861,7 +1889,7 @@ InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
         jr c,+
         xor a ; zero if out of range
 +:      sla a   ; a*2
-        ld d,$00
+        ld d,0
         ld e,a
 
         ld iy,VisRoutinesStrings    ; Get location of string
@@ -1875,7 +1903,9 @@ InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
         add iy,de
         ld h,(iy+1)
         ld l,(iy+0)
-        call callHL
+        push de
+          call callHL
+        pop de
 
         ld iy,VisDisplayRoutines    ; Update VBlank routine
         add iy,de
@@ -1918,166 +1948,130 @@ UpdateVis:
     pop hl
     ret
 
-ClearBuffer:   ; uses a,c,hl
-    ; Clear buffer every frame
-    ld c,64
+ClearBuffer:   ; uses a,bc,de,hl
+    ; Clear VisBuffer to all 0
+    ld bc,64-1
     ld hl,VisBuffer
-  -:xor a
+    ld de,VisBuffer+1
+    xor a
     ld (hl),a
-    inc hl
-    dec c
-    jr nz,-
+    ldir
     ret
 
 DrawVisBuffer:
-    push hl ; for various stuff
-    push de ; second variable for maths
-    push bc ; b = row count c = column count
-    push af ; for maths
-        ; Draw buffer to screen
-        ld hl,VisLocation
-        call VRAMToHL
-        ld b,4      ; Number of rows
-        _DrawVisBufferLoop:
-            ; Draw line
-            ld c,32
-            ld hl,VisBuffer
-            _DrawRow:
-                ld a,(hl)           ; Get the value for this slot
-                ld d,b              ; d = 8*(b-1)
-                dec d
-                sla d
-                sla d
-                sla d
-                sub d               ; Subtract d = minimum value
-                jr nc,_AboveMinimum
-                xor a              ; If the result is negative then I want 0
-                _AboveMinimum:
-                cp 9                ; Is it 9 or more?
-                jr c,_LessThan8
-                ld a,8              ; If not, I want 8
-                _LessThan8:
-                add a,96
-                out ($BE),a
-                push hl ; delay
-                pop hl
-                xor a
-                out ($BE),a
-                inc hl
-                dec c
-                jr nz,_DrawRow
-            dec b
-            jr nz,_DrawVisBufferLoop
-    pop af
-    pop bc
-    pop de
+; Draw first 32 entries of VisBuffer as vertical bars of height == value
+    ld hl,VisLocation
+    call VRAMToHL
+    ld c,4      ; Number of rows
+--: ; Draw line
+    ld b,32
+    ld hl,VisBuffer
+    ld d,c              ; d = 8*(c-1)
+    dec d
+    sla d
+    sla d
+    sla d
+-:  ld a,(hl)           ; Get the height for this entry
+    ; Convert to a tile height
+    sub d               ; Subtract d = minimum value for this tile
+    jr nc,_AboveMinimum
+    xor a              ; If the result is negative then I want 0
+    _AboveMinimum:
+    cp 9                ; Is it 9 or more?
+    jr c,_LessThan8
+    ld a,8              ; If not, I want 8
+    _LessThan8:
+    add a,96 ; tile offset
+    out ($BE),a
+    push hl ; delay
     pop hl
+    xor a
+    out ($BE),a
+    inc hl
+    djnz -
+    dec c
+    jr nz,--
     ret
 
 FrequencyVis:
-    push af
-    push hl
-    push de
-    push bc
-    push ix
-    push iy
-        call ClearBuffer
+    call ClearBuffer
 
-        ld ix,VGMPSGTones
-        ld iy,VGMPSGVolumes
+    ld ix,VGMPSGTones
+    ld iy,VGMPSGVolumes
 
-        ld b,3  ; how many channels to do
-        _Loop:
-            ld e,(ix+0)
-            ld d,(ix+1)     ; de contains the frequency value 0000-03ff
-            ld a,(iy+0)
-            cpl
-            and $0f
-            ld c,a          ; c  contains the volume 0-f (inverted to be normal sense)
+    ld b,3  ; how many channels to do
+-:  ld e,(ix+0)
+    ld d,(ix+1)     ; de contains the frequency value 0000-03ff
+    ld a,(iy+0)
+    cpl
+    and $0f
+    ld c,a          ; c  contains the volume 0-f (inverted to be normal sense)
 
-            ; Divide frequency by 32 = >>5
-            ld a,e
-            and %11100000
-            ld e,a
-            rr d    ; Shift d and e together for 2 bits (10 bit number)
-            rr e
-            rr d
-            rr e
-            srl e   ; Then just shift e, inputting 0, for the remaining 3 shifts
-            srl e
-            srl e
-            ; I want 31-(this value)
-            ld a,31
-            sub e
-            ld e,a
+    ; Divide frequency by 32 = >>5
+    ld a,e
+    and %11100000
+    ld e,a
+    rr d    ; Shift d and e together for 2 bits (10 bit number)
+    rr e
+    rr d
+    rr e
+    srl e   ; Then just shift e, inputting 0, for the remaining 3 shifts
+    srl e
+    srl e
+    ; I want 31-(this value)
+    ld a,31
+    sub e
+    ld e,a
 
-            ; Add volume to value for channel
-            ld hl,VisBuffer
-            ld d,$00
-            add hl,de
-            ld a,c
-            add a,(hl)
-            ld (hl),a
+    ; Add volume to value for channel
+    ld hl,VisBuffer
+    ld d,$00
+    add hl,de
+    ld a,c
+    add a,(hl)
+    ld (hl),a
 
-            inc ix          ; Move to next values
-            inc ix
-            inc iy
+    inc ix          ; Move to next values
+    inc ix
+    inc iy
 
-            dec b           ; Loop counter
-            jr nz,_Loop
+    djnz -
 
-        ; Noise: bump every value by up to 3
-        ld c,32
-        ld hl,VisBuffer
-        ld a,(VGMPSGVolumes+3)
-        cpl
-        and $f
-        ld b,a
-        srl b
-        srl b
-        _AddNoise:
-            ld a,(hl)
-            add a,b
-            ld (hl),a
-            inc hl
-            dec c
-            jr nz,_AddNoise
-    pop iy
-    pop ix
-    pop bc
-    pop de
-    pop hl
-    pop af
+    ; Noise: bump every value by up to 3
+    ld c,32
+    ld hl,VisBuffer
+    ld a,(VGMPSGVolumes+3)
+    cpl
+    and $f
+    ld b,a
+    srl b
+    srl b
+    _AddNoise:
+        ld a,(hl)
+        add a,b
+        ld (hl),a
+        inc hl
+        dec c
+        jr nz,_AddNoise
     ret
 
 VolumeVis:
-    push af
-    push hl
-    push bc
-    push ix
-        call ClearBuffer
+    call ClearBuffer
 
-        ld hl,VGMPSGVolumes
-        ld ix,VisBuffer
-        ld b,4          ; How many channels to do
-        _VolVisLoop:
-            ld a,(hl)   ; Get volume
-            cpl
-            and $0f
-            sla a       ; Multiply by 2 to fill the vis
-            ld c,8      ; Fill 8 slots with that
-            _VolVisFillLoop:
-                ld (ix+0),a
-                inc ix
-                dec c
-                jr nz,_VolVisFillLoop
-            inc hl
-            dec b
-            jr nz,_VolVisLoop
-    pop ix
-    pop bc
-    pop hl
-    pop af
+    ld hl,VGMPSGVolumes
+    ld de,VisBuffer
+    ld c,4          ; How many channels to do
+--: ld a,(hl)   ; Get volume
+    cpl
+    and $0f
+    sla a       ; Multiply by 2 to fill the vis
+    ld b,8      ; Fill 8 slots with that
+-:  ld (de),a
+    inc de
+    djnz -
+    inc hl
+    dec c
+    jr nz,--
     ret
 
 PianoVisInit:
@@ -2199,81 +2193,73 @@ PianoYPositions:
 PianoVis:
     ; Calculate hand x,y positions
     ; Store as xyxyxy in vis buffer
-
-    push ix
-    push iy
-    push af
-    push bc
-    push de
-    push hl
-
     ld ix,VGMPSGTones       ; 3 x 2 bytes
     ld iy,VisBuffer         ; Where to store x,y
     ld c,3  ; Number of hands (PSG)
-    --:
+--:
     push bc
-    ld d,(ix+1)             ; Tone value
-    ld e,(ix+0)
+      ld d,(ix+1)             ; Tone value
+      ld e,(ix+0)
 
-    ; Handle periodic noise when c=1
-    ld a,c
-    cp 1
-    jr nz,+
-    ld a,(VGMPSGNoiseIsPeriodic)
-    cp 1
-    jr nz,+
-    ; I need to divide the frequency by 16, ie, <<4
-    sla e
-    rl  d
-    sla e
-    rl  d
-    sla e
-    rl  d
-    sla e
-    rl  d
-    ; I also want it to use the ch3 volume for ch2
-    dec c
-    +:
-    ; If volume=0 then don't show the hand
-    ld hl,VGMPSGVolumes+3
-    ld b,0
-    scf
-    ccf
-    sbc hl,bc
-    ld a,(hl)
-    and $f
-    cp $f
-    jr z,_NoHand
-    ld b,0          ; counter
-    push iy
-    ld iy,PianoVisMinValsPSG; values to look at
-    scf
-    ccf
-  -:ccf             ; set carry flag -> sbc = <=
-    ld h,(iy+1)     ; get value stored there
-    ld l,(iy+0)
-    sbc hl,de       ; Subtract actual value
-    jr c,+          ; Loop until I find a value less than or equal to the note
-    inc iy
-    inc iy
-    inc b
-    jr -
-  +:pop iy          ; b is now the key number, counting from the left
-    push bc         ; need to preserve c
-        ld c,b
-        ld b,0
-        ld hl,PianoXPositions
-        add hl,bc
-        ld a,(hl)
-        ld (iy+0),a
-        ld hl,PianoYPositions
-        add hl,bc
-        ld a,(hl)
-        ld (iy+1),a
-    pop bc
-    jr +
-    _NoHand:    ; Don't show the hand if applicable
-    ld (iy+1),208+16
+      ; Handle periodic noise when c=1
+      ld a,c
+      cp 1
+      jr nz,+
+      ld a,(VGMPSGNoiseIsPeriodic)
+      cp 1
+      jr nz,+
+      ; I need to divide the frequency by 16, ie, <<4
+      sla e
+      rl  d
+      sla e
+      rl  d
+      sla e
+      rl  d
+      sla e
+      rl  d
+      ; I also want it to use the ch3 volume for ch2
+      dec c
+      +:
+      ; If volume=0 then don't show the hand
+      ld hl,VGMPSGVolumes+3
+      ld b,0
+      scf
+      ccf
+      sbc hl,bc
+      ld a,(hl)
+      and $f
+      cp $f
+      jr z,_NoHand
+      ld b,0          ; counter
+      push iy
+      ld iy,PianoVisMinValsPSG; values to look at
+      scf
+      ccf
+    -:ccf             ; set carry flag -> sbc = <=
+      ld h,(iy+1)     ; get value stored there
+      ld l,(iy+0)
+      sbc hl,de       ; Subtract actual value
+      jr c,+          ; Loop until I find a value less than or equal to the note
+      inc iy
+      inc iy
+      inc b
+      jr -
+    +:pop iy          ; b is now the key number, counting from the left
+      push bc         ; need to preserve c
+          ld c,b
+          ld b,0
+          ld hl,PianoXPositions
+          add hl,bc
+          ld a,(hl)
+          ld (iy+0),a
+          ld hl,PianoYPositions
+          add hl,bc
+          ld a,(hl)
+          ld (iy+1),a
+      pop bc
+      jr +
+      _NoHand:    ; Don't show the hand if applicable
+      ld (iy+1),208+16
   +:pop bc
     dec c
     inc ix
@@ -2358,13 +2344,6 @@ PianoVis:
     inc iy
     jr nz,--
 
-    pop hl
-    pop de
-    pop bc
-    pop af
-    pop iy
-    pop ix
-
     ret
 
 DrawPianoVis:
@@ -2432,6 +2411,10 @@ DrawPianoVis:
     pop af
     ret
 
+NoVisInit:
+  call ClearBuffer
+  call DrawVisBuffer
+  ret
 
 .define NumSnowFlakes 32
 
@@ -2962,28 +2945,19 @@ EnableFM:
   ; disable I/O chip
   ld a,(Port3EValue)
   set 2,a ; set bit 2 to disable the I/O chip
-  out ($3e),a
+  out (PORT_MEMORY_CONTROL),a
 
   ; https://www.smspower.org/Development/AudioControlPort
   ld a,$03
-  out ($f2),a
+  out (PORT_AUDIO_CONTROL),a
 
   ; enable I/O chip
   ld a,(Port3EValue)
-  out ($3e),a
+  out (PORT_MEMORY_CONTROL),a
+  
+  ld a,1
+  ld (FMChipEnabled),a
   ret
-
-  ; NOTE:
-  ; Real games also have to check that the FM hardware is there and,
-  ; if not, play PSG music. This is done by writing various values
-  ; to port $f2 while the I/O chip is disabled, and checking that
-  ; bit 0 (?) retains the value written. If so, it is let set to 1
-  ; and the function returns an appropriate value to the rest of the
-  ; code to say that FM is enabled.
-  ;
-  ; Since I'm playing FM regardless of whether it's there or not,
-  ; I don't bother here.
-
 .ends
 
 .section "PAL/NTSC detection" FREE
@@ -3382,19 +3356,23 @@ IsJapanese:
 ;==============================================================
 HasFMChip:
     ; If there's an FM chip I should be able to modify $f2
-    push bc
-        in a,($f2)      ; Get what's there
-        ld b,a
-        xor %00000001   ; Toggle bit 0
-        out ($f2),a     ; Write it out
-        in a,($f2)      ; Read it back
-        cp b
-    pop bc    
+    ld a,(Port3EValue)
+    set 2,a
+    out (PORT_MEMORY_CONTROL),a
+      in a,(PORT_AUDIO_CONTROL)      ; Get what's there
+      ld b,a
+      xor %00000001   ; Toggle bit 0
+      out (PORT_AUDIO_CONTROL),a     ; Write it out
+      in a,(PORT_AUDIO_CONTROL)      ; Read it back
+      cp b
+    ld a,(Port3EValue)
+    set 2,a
+    out (PORT_MEMORY_CONTROL),a
     jp z,_NoFM
     ld a,1
     ret
     _NoFM:
-    ld a,0
+    xor a
     ret
 .ends
 
