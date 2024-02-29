@@ -17,25 +17,25 @@ auto.makefile: smsvgmplayer.stub.asm
 -include auto.makefile
 
 # We want to build the resources automatically
-%.tilemap.inc: %.bmp
+%.tilemap.inc: %.png
 	$(BMP2TILE) $< -savetilemap $@
   
-art/3d-pad.lsbtilemap: art/3d-pad.bmp
+art/3d-pad.lsbtilemap: art/3d-pad.png
 	$(BMP2TILE) $< -tileoffset 146 -savetilemap $@
 
-art/piano.tilemap.inc: art/piano.bmp
+art/piano.tilemap.inc: art/piano.png
 	$(BMP2TILE) $< -tileoffset 256 -savetilemap $@
 
-%.tilemap.pscompr: %.bmp
+%.tilemap.pscompr: %.png
 	$(BMP2TILE) $< -savetilemap $@
 
-%.tiles.pscompr: %.bmp
+%.tiles.pscompr: %.png
 	$(BMP2TILE) $< -savetiles $@
 
-%.tiles.withdupes.pscompr: %.bmp
+%.tiles.withdupes.pscompr: %.png
 	$(BMP2TILE) $< -noremovedupes -savetiles $@
 
-%.palette: %.bmp
+%.palette: %.png
 	$(BMP2TILE) $< -fullpalette -savepalette $@
 
 # And then we build it
