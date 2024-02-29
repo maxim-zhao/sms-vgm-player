@@ -2123,7 +2123,6 @@ _NoHand:    ; Don't show the hand if applicable
 
     SetDebugColour(3,0,3)
     ; Now do FM :)
-foo:
     ; First check for rhythm mode
     ld b,6
     ld a,(VGMYM2413Registers+$e)
@@ -2303,7 +2302,7 @@ _smallHands:
 
     ld b,c
 -:  ld a,(hl)     ;  7
-    sub 2         ;  7
+    add 2         ;  7 ; Small hand finger is 2px closer to the left
     out ($be),a   ; 11 -> 36 ; x-pos
     inc hl        ;  6
     nop           ;  4
