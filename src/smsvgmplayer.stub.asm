@@ -1539,7 +1539,7 @@ YM2413:
       ld d,a      ; d = data
     ld a,(Port3EValue)
     out (PORT_MEMORY_CONTROL),a
-
+    
     ; Store the value
     ld a,e
     cp $39
@@ -1551,7 +1551,20 @@ YM2413:
       ld hl,VGMYM2413Registers
       add hl,de
       ld (hl),b
-    pop bc
+
+      ; If a YM2413 key down is seen, we want to enable FM.
+      ; We only do it here because some VGMs may have FM initialisation, but enabling FM would mute PSG on a Mark III.
+      and $f0
+      cp $20
+      jp nz,+
+      ld a,b
+      or %00010000
+      jr z,+
+      ld a,(FMChipEnabled)
+      or a
+      jr nz,+
+      call EnableFM
++:  pop bc
     pop hl
     jp GetData
 
