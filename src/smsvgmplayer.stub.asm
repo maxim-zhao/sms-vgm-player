@@ -839,10 +839,6 @@ VGMPSGTone1stByte       db      ; PSG tone first byte
 VGMPSGNoiseMode         db      ; PSG noise mode in low 3 bits
 VGMWaitTotalOverflow    db      ; Kludgy :/
 VGMYM2413Registers      dsb $38 ; Just the registers, analyse yourself :)
-;VGMYM2413FNums          dsw 9   ; 9 x word
-;VGMYM2413Blocks         dsb 9   ; 9 x byte
-;VGMYM2413Keys           dsb 9   ; 9 x byte - byte is whole byte for reg 0x2n to make muting possible
-;VGMYM2413Rhythm         db      ; 
 VGMStartPage            db      ; Start point page
 VGMStartOffset          dw      ; Start point offset when paged in
 .ende
@@ -1993,8 +1989,25 @@ PianoVisMinValsPSG:
 
 PianoVisMinValsFM:
 ; Same again, for FM
-; Number = FNum << Block
-; Minimum value for MIDI note n = 2^(n/12) * 83.76486
+; We assume the FNum/Block have been scaled to be >255
+; We have these minimum values for notes:
+; Note  MIDI  Minimum F-num
+; G       19            251 
+; G#      20            266 
+; A       21            282
+; A#      22            299 
+; B       23            316 
+; C       24            335 
+; C#      25            355 
+; D       26            376 
+; D#      27            399 
+; E       28            422 
+; F       29            447 
+; F#      30            474 
+; G       31            502
+; G#      32            532
+; So we make a similar table of "add each in turn and when you hit 0 the count is your note index"
+.dw -266, -16, -17, -17, -19, -20, -21, -23, -23, -25, -27, -28, -30
 
 ;       C    C#     D    D#     E     F    F#     G    G#     A    A#     B
 .dw     0
@@ -2122,6 +2135,100 @@ _NoHand:    ; Don't show the hand if applicable
 
     SetDebugColour(3,0,3)
     ; Now do FM :)
+foo:
+    ; First check for rhythm mode
+    ld b,6
+    ld a,(VGMYM2413Registers+$e)
+    and %00100000
+    jr nz,+
+    ld b,9
++:  ld ix,VGMYM2413Registers
+--: ; Check for key down
+    ld a,(ix+$20)
+    and %00010000
+    jr z,_NoHandFM
+    ; Now get the frequency
+    ld l,(ix+$10) ; F-num low 8 bits
+    ld a,(ix+$20)
+    ld c,a
+    and 1
+    ld h,a ; high bit -> hl is F-num, 0..511
+    ; 0 frequency is not a note
+    ld a,h
+    or l
+    jr z,_NoHandFM
+    ld a,c
+    srl a
+    and %111
+    ld b,a ; Block, 0..7
+    ; F-num is a frequency base, block is an octave shift.
+    ; We normalise it here
+-:  ld a,h
+    or a
+    jr nz,+
+    add hl,hl
+    dec b
+    jr -
++:  ; Now we want to find which note hl corresponds to.
+    push iy
+      ld c,0
+      ld iy,PianoVisMinValsFM
+-:    ld e,(iy+0)
+      ld d,(iy+1)
+      add hl,de       ; Add value
+      jr nc,+         ; Loop until I find a value where it no-carries which means the negative value was enough to go past 0
+      inc c           ; else it's a higher note
+      inc iy
+      inc iy
+      jr -
++:  pop iy
+    ; Now we have b = octave, c = note but for the wrong definition of each of those.
+    ; For c, it can range from 0 -> G up to 13 -> G#
+    ; First we add 5 so the note is indexing from C
+    ld a,c
+    add 5
+    ; If it is >11 then we want to scale back down
+    cp 12
+    jr nc,+
+    sub 12
+    dec b
++:  ; Now we want to correct b. For our octave 0, we start with C with an F-num low bound of 168 for block 0.
+    ; This will have been scaled to 336 on block -1, then looked up to note 5, converted to note 0.
+    ; So we just want to add 1 to the block!
+    inc b
+    ; Now we sanity-check the block is in range
+    ld a,b
+    or a
+    jp m,_NoHandFM
+    ; The highest note is octave 8
+    cp 9
+    jp nc,_NoHandFM
+    ; Now we are good!
+    ; Look up the y just from the note
+    ld d,0
+    ld e,c
+    ld hl,PianoYPositions
+    add hl,de
+    ld a,(hl)
+    ld (iy+32),a
+    ; And the x
+    ld hl,PianoXPositions
+    add hl,de
+    ld a,(hl)
+    ; The octave count adds 28px per octave
+    ld hl,_Times28
+    ld c,b
+    ld b,0
+    add hl,bc
+    ld b,(hl)
+    add a,b
+    ld (iy+16),a
+    ; Next output slot
+    inc iy
+    
+_NoHandFM:
+    inc ix ; Next channel
+    djnz --
     
     /*
     ld ix,0 ; channel number
@@ -2278,9 +2385,9 @@ _smallHands:
     sub 2         ;  7
     out ($be),a   ; 11 -> 36 ; x-pos
     inc hl        ;  6
-    inc hl        ;  6
+    nop           ;  4
     ld a,$b8      ;  7 ; Small hand tile index
-    out ($be),a   ; 11 -> 30
+    out ($be),a   ; 11 -> 28
     djnz -        ; 13
     ret
     
