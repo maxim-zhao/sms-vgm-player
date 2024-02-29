@@ -1989,7 +1989,7 @@ PianoVisMinValsPSG:
 
 PianoVisMinValsFM:
 ; Same again, for FM
-; We assume the FNum/Block have been scaled to be >255
+; We assume the FNum/Block have been scaled to be >255/whatever
 ; We have these minimum values for notes:
 ; Note  MIDI  Minimum F-num
 ; G       19            251 
@@ -2006,20 +2006,8 @@ PianoVisMinValsFM:
 ; F#      30            474 
 ; G       31            502
 ; G#      32            532
-; So we make a similar table of "add each in turn and when you hit 0 the count is your note index"
+; So we make a similar table of "add each in turn and when you hit 0 the count is your note index". Then you have to sort the rest out in code.
 .dw -266, -16, -17, -17, -19, -20, -21, -23, -23, -25, -27, -28, -30
-
-;       C    C#     D    D#     E     F    F#     G    G#     A    A#     B
-.dw     0
-.dw   168,  177,  188,  199,  211,  224,  237,  251,  266,  282,  299,  316
-.dw   335,  355,  376,  398,  422,  447,  474,  502,  532,  564,  597,  633
-.dw   670,  710,  752,  797,  844,  895,  948, 1004, 1063, 1127, 1194, 1265
-.dw  1340, 1420, 1504, 1594, 1689, 1789, 1895, 2008, 2127, 2254, 2388, 2530
-.dw  2680, 2840, 3009, 3188, 3377, 3578, 3791, 4016, 4255, 4508, 4776, 5060
-.dw  5361, 5680, 6017, 6375, 6754, 7156, 7582, 8032, 8510, 9016, 9552,10120
-.dw 10722,11359,12035,12751,13509,14312,15163,16065,17020,18032,19104,20240
-.dw 21444,22719,24070,25501,27017,28624,30326,32129,34040,36064,38209,40481
-.dw 42888,45438,48140,51002,54035,57248,60652,64259,64259,64259,64259,64259 ; repeated value on purpose! next is past 65535
 
 PianoXPositions:
 ;     C  C#   D  D#   E   F  F#   G  G#   A  A#   B
@@ -2143,167 +2131,100 @@ foo:
     jr nz,+
     ld b,9
 +:  ld ix,VGMYM2413Registers
---: ; Check for key down
-    ld a,(ix+$20)
-    and %00010000
-    jr z,_NoHandFM
-    ; Now get the frequency
-    ld l,(ix+$10) ; F-num low 8 bits
-    ld a,(ix+$20)
-    ld c,a
-    and 1
-    ld h,a ; high bit -> hl is F-num, 0..511
-    ; 0 frequency is not a note
-    ld a,h
-    or l
-    jr z,_NoHandFM
-    ld a,c
-    srl a
-    and %111
-    ld b,a ; Block, 0..7
-    ; F-num is a frequency base, block is an octave shift.
-    ; We normalise it here
--:  ld a,h
-    or a
-    jr nz,+
-    add hl,hl
-    dec b
-    jr -
-+:  ; Now we want to find which note hl corresponds to.
-    push iy
-      ld c,0
-      ld iy,PianoVisMinValsFM
--:    ld e,(iy+0)
-      ld d,(iy+1)
-      add hl,de       ; Add value
-      jr nc,+         ; Loop until I find a value where it no-carries which means the negative value was enough to go past 0
-      inc c           ; else it's a higher note
-      inc iy
-      inc iy
+--: push bc
+      ; Check for key down
+      ld a,(ix+$20)
+      and %00010000
+      jr z,_NoHandFM
+      ; Now get the frequency
+      ld l,(ix+$10) ; F-num low 8 bits
+      ld a,(ix+$20)
+      ld c,a
+      and 1
+      ld h,a ; high bit -> hl is F-num, 0..511
+      ; 0 frequency is not a note
+      ld a,h
+      or l
+      jr z,_NoHandFM
+      ld a,c
+      srl a
+      and %111
+      ld b,a ; Block, 0..7
+      ; F-num is a frequency base, block is an octave shift.
+      ; We normalise it here
+-:    ld a,h
+      or a
+      jr nz,+
+      add hl,hl
+      dec b
       jr -
-+:  pop iy
-    ; Now we have b = octave, c = note but for the wrong definition of each of those.
-    ; For c, it can range from 0 -> G up to 13 -> G#
-    ; First we add 5 so the note is indexing from C
-    ld a,c
-    add 5
-    ; If it is >11 then we want to scale back down
-    cp 12
-    jr nc,+
-    sub 12
-    dec b
-+:  ; Now we want to correct b. For our octave 0, we start with C with an F-num low bound of 168 for block 0.
-    ; This will have been scaled to 336 on block -1, then looked up to note 5, converted to note 0.
-    ; So we just want to add 1 to the block!
-    inc b
-    ; Now we sanity-check the block is in range
-    ld a,b
-    or a
-    jp m,_NoHandFM
-    ; The highest note is octave 8
-    cp 9
-    jp nc,_NoHandFM
-    ; Now we are good!
-    ; Look up the y just from the note
-    ld d,0
-    ld e,c
-    ld hl,PianoYPositions
-    add hl,de
-    ld a,(hl)
-    ld (iy+32),a
-    ; And the x
-    ld hl,PianoXPositions
-    add hl,de
-    ld a,(hl)
-    ; The octave count adds 28px per octave
-    ld hl,_Times28
-    ld c,b
-    ld b,0
-    add hl,bc
-    ld b,(hl)
-    add a,b
-    ld (iy+16),a
-    ; Next output slot
-    inc iy
++:    ; Now we want to find which note hl corresponds to.
+      push iy
+        ld c,0
+        ld iy,PianoVisMinValsFM
+-:      ld e,(iy+0)
+        ld d,(iy+1)
+        add hl,de       ; Add value
+        jr nc,+         ; Loop until I find a value where it no-carries which means the negative value was enough to go past 0
+        inc c           ; else it's a higher note
+        inc iy
+        inc iy
+        jr -
++:    pop iy
+      ; Now we have b = octave, c = note but for the wrong definition of each of those.
+      ; For c, it can range from 0 -> G up to 13 -> G#
+      ;    GGAABCCDDEFFGGAABCCDDEFFGGAABCCDDEFFGGAABCCDDEFFGGAABCCDDEFFGGAAB
+      ;     # #  # #  # # #  # #  # # #  # #  # # #  # #  # # #  # #  # # #
+      ;              0:|------------|        2:|------X-----|             ; What I have: block 2, index 8
+      ; -1:|------------|        1:|------------|        3:|------------| ;
+      ;       0:|----------|          2:|----------|          4:|----------|
+      ;                   1:|----------|          3:|-X--------|          ; What I want: block 3, index 3
+      ; So, we need to:
+      ; 1. Subtract 5 from the note index 
+      ; 2. Increment the block index
+      ; 3. If note index is negative, add 12 and decrement block index
+      ld a,c
+      sub 5
+      jr nc,+
+      add 12
+      dec b
++:    inc b
+      ; put the note in de
+      ld e,a
+      ld d,0
+
+      ; Now we sanity-check the block is in range
+      ld a,b
+      or a
+      jp m,_NoHandFM
+      ; The highest note is octave 8
+      cp 9
+      jp nc,_NoHandFM
+      ; Now we are good!
+      ; Look up the y just from the note
+      ld hl,PianoYPositions
+      add hl,de
+      ld a,(hl)
+      ld (iy+32),a
+      ; And the x
+      ld hl,PianoXPositions
+      add hl,de
+      ld a,(hl)
+      ; The octave count adds 28px per octave
+      ld hl,_Times28
+      ld e,b
+      add hl,de
+      ld b,(hl)
+      add a,b
+      ld (iy+16),a
+      ; Next output slot
+      inc iy
     
 _NoHandFM:
-    inc ix ; Next channel
-    djnz --
-    
-    /*
-    ld ix,0 ; channel number
-    ld c,6  ; Number of hands (FM) - assume rhythm mode (probably 100% of games)
-    ; TODO: handle rhythm mode properly, do 9 if in tone mode
---:
-    ; If key isn't pressed then don't bother
-    push ix
-    pop hl
-    ld de,VGMYM2413Keys
-    add hl,de
-    bit 4,(hl)  ; Is the key pressed?
-    jr z,_NoHand2
-    ; Get FNum
-    push ix
-        ld de,VGMYM2413FNums
-        add ix,ix       ; 2 bytes per channel
-        add ix,de
-        ld h,(ix+1)     ; FNum
-        ld l,(ix+0)
-    pop ix
-    ; Get Block
-    push ix
-        ld de,VGMYM2413Blocks
-        add ix,de
-        ld a,(ix+0)     ; Block
-    pop ix
-    or a
-    jr z,+              ; ship shifting if a=0
-  -:sla l               ; shift hl by Block bits
-    rl  h
-    jr c,_Overflow
-    dec a
-    jr nz,-
-  +:push hl
-    pop de              ; Now de = FNum << Block
-    jr _DEtoNoteNum
-    _Overflow:          ; If, when shifting FNum by Block, it overflows 16 bits then act as if the value was 65535
-    ld de,65534
-;    jr _DEtoNoteNum
-    _DEtoNoteNum:
-    ld b,0          ; counter
-    push iy
-      ld iy,PianoVisMinValsFM ; values to look at
-      scf
-      ccf
-    -:ccf             ; set carry flag -> sbc = >
-      ld h,(iy+1)     ; get value stored there
-      ld l,(iy+0)
-      sbc hl,de       ; Subtract actual value
-      jr nc,+         ; Loop until I find a value greater than the note
-      inc iy
-      inc iy
-      inc b
-      jr -
-    +:dec b           ; b is now the key number, counting from the left
-    pop iy
-    push bc         ; need to preserve c
-        ld c,b
-        ld b,0
-        ld hl,PianoXPositions
-        add hl,bc
-        ld a,(hl)
-        ld (iy+0),a
-        ld hl,PianoYPositions
-        add hl,bc
-        ld a,(hl)
-        ld (iy+1),a
+      inc ix ; Next channel
     pop bc
-    inc iy
-    _NoHand2:    ; Don't show the hand if applicable
-    inc ix
-    dec c
-    jp nz,--
-    */
+    djnz --
+
     ; Store the total count
     push iy
     pop hl
