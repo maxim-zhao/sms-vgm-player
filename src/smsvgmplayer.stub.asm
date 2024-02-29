@@ -58,10 +58,8 @@ SDSCNotes:
 ;==============================================================
 .enum $c000 export
 Port3EValue                     db
-VGMMemoryStart                  dsb 256
 ButtonState                     db
 LastButtonState                 db
-VisBuffer                       dsb 256 ; Visualisers can do as they wish with this
 VisNumber                       db
 IsPalConsole                    db
 IsJapConsole                    db
@@ -72,11 +70,13 @@ VisRoutine                      dw ; Routine to calculate vis
 VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
 VisChanged                      db ; Flag to signal that the vis needs to be initialised
 SecondsChanged                  db
+VisBuffer                       dsb 256 ; Visualisers can do as they wish with this
 LoopsChanged                    db
 PaletteChanged                  db
 PaletteNumber                   db
 RandomSR                        dw ; Random number generator shift register, needs seeding
 GD3DisplayerBuffer              dsb 33
+VGMMemoryStart                  dsb 256
 .ende
 
 .include "PhantasyStardecompressors.asm"
@@ -144,6 +144,8 @@ NoVBlank:
 
 .section "VGM Player vblank" free
 VGMPlayerVBlank:
+  SetDebugColour(0,1,0)
+  call VGMUpdate      ; Read/handle sound data
   SetDebugColour(1,0,0)
   call CheckInput ; Read input into memory
   call ShowTime   ; Update time display
@@ -171,9 +173,6 @@ VGMPlayerVBlank:
 ; Pause button handler
 ;==============================================================
 .section "!NMI handler" FORCE
-  ; Debug resetter
-;  jr $0000
-
   ; Dodgy PAL/NTSC speed switch
   push hl
   push de
@@ -357,8 +356,6 @@ main:
   ei
 InfiniteLoop:   ; to stop the program
   halt
-  SetDebugColour(0,1,0)
-  call VGMUpdate      ; Write sound data
   SetDebugColour(0,2,0)
   call ProcessInput   ; Process input from the last VBlank
   SetDebugColour(0,3,0)
@@ -700,14 +697,21 @@ DrawLargeDigit:
     sla a ; multiply by 2
     ld c,a
     add a,BigNumbersOffset
-    out ($be),a
-    xor a
-    out ($be),a
-    ld a,c
-    add a,BigNumbersOffset+1
-    out ($be),a
-    xor a
-    out ($be),a
+    out ($be),a               ; 11 -> start
+    nop                       ; 4
+    nop                       ; 4
+    nop                       ; 4
+    xor a                     ; 4
+    out ($be),a               ; 11 -> 27 cycles
+    nop                       ; 4
+    ld a,c                    ; 4
+    add a,BigNumbersOffset+1  ; 7
+    out ($be),a               ; 11 -> 26 cycles
+    nop                       ; 4
+    nop                       ; 4
+    nop                       ; 4
+    xor a                     ; 4
+    out ($be),a               ; 11 -> 27 cycles
     ld a,c
 
     push bc
@@ -718,11 +722,18 @@ DrawLargeDigit:
 
     add a,BigNumbersOffset+20
     out ($be),a
+    nop                       ; 4
+    nop                       ; 4
+    nop                       ; 4
     xor a
     out ($be),a
+    nop                       ; 4
     ld a,c
     add a,BigNumbersOffset+21
     out ($be),a
+    nop                       ; 4
+    nop                       ; 4
+    nop                       ; 4
     xor a
     out ($be),a
   pop hl
@@ -811,28 +822,29 @@ UpdatePalette:
 
 .section "VGM routines" free
 ; VGM routines memory mapping:
-.enum VGMMemoryStart
-VGMCounterLocation      dw      ; 00-01 VGM data pointer
-VGMWaitTotal            dw      ; 02-03 Wait length total
-VGMFrameLength          dw      ; 04-05 Amount to wait per frame (allows fast-forwarding :P)
-VGMPagingBuffer         ds 4    ; 06-09 Paging border buffer
-VGMLoopPage             db      ; 0a    Loop point page
-VGMLoopOffset           dw      ; 0b-0c Loop point offset when paged in
-VGMPlayerState          db      ; 0d    Player state - playing, paused, stopped, etc
-VGMPSGVolumes           ds 4    ; 0e-11 PSG volumes (channels 0-3)
-VGMTimeMins             db      ; 12    Time (mins), BCD
-VGMTimeSecs             db      ; 13    Time (secs), BCD
-VGMTimeSamples          dw      ; 14-15 Time (samples)
-VGMLoopsPlayed          db      ; 16    Number of loops played
-VGMPSGTones             ds 6    ; 17-1c PSG tone values
-VGMPSGTone1stByte       db      ; 1d    PSG tone first byte
-VGMWaitTotalOverflow    db      ; 1e    Kludgy :/
-VGMYM2413FNums          ds 12   ; 1f-1a 6 x word
-VGMYM2413Blocks         ds 6    ; 1b-20 6 x byte
-VGMYM2413Keys           ds 6    ; 21-26 6 x byte - byte is whole byte for reg 0x2n to make muting possible
-VGMPSGNoiseIsPeriodic   db      ; 27    Byte flag, if set then noise is periodic/tone2
-VGMStartPage            db      ; 28    Start point page
-VGMStartOffset          dw      ; 29-2a Start point offset when paged in
+.enum VGMMemoryStart export
+VGMCounterLocation      dw      ; VGM data pointer
+VGMWaitTotal            dw      ; Wait length total
+VGMFrameLength          dw      ; Amount to wait per frame (allows fast-forwarding :P)
+VGMLoopPage             db      ; Loop point page
+VGMLoopOffset           dw      ; Loop point offset when paged in
+VGMPlayerState          db      ; Player state - playing, paused, stopped, etc
+VGMTimeMins             db      ; Time (mins), BCD
+VGMTimeSecs             db      ; Time (secs), BCD
+VGMTimeSamples          dw      ; Time (samples)
+VGMLoopsPlayed          db      ; Number of loops played
+VGMPSGVolumes           dsb 4   ; PSG volumes (channels 0-3)
+VGMPSGTones             dsb 6   ; PSG tone values
+VGMPSGTone1stByte       db      ; PSG tone first byte
+VGMPSGNoiseMode         db      ; PSG noise mode in low 3 bits
+VGMWaitTotalOverflow    db      ; Kludgy :/
+VGMYM2413Registers      dsb $38 ; Just the registers, analyse yourself :)
+;VGMYM2413FNums          dsw 9   ; 9 x word
+;VGMYM2413Blocks         dsb 9   ; 9 x byte
+;VGMYM2413Keys           dsb 9   ; 9 x byte - byte is whole byte for reg 0x2n to make muting possible
+;VGMYM2413Rhythm         db      ; 
+VGMStartPage            db      ; Start point page
+VGMStartOffset          dw      ; Start point offset when paged in
 .ende
 
 ; Numbers for VGMPlayerState
@@ -1062,9 +1074,9 @@ _Stop:
     ld (VGMPSGVolumes),hl
     ld (VGMPSGVolumes+2),hl
 
-    ld hl,VGMYM2413Keys         ; Turn off keys -> stop vis showing it
+    ld hl,VGMYM2413Registers    ; Zero registers
     xor a
-    ld c,6
+    ld c,$38
   -:ld (hl),a
     inc hl
     dec c
@@ -1097,17 +1109,17 @@ MuteAllSound:
     ld b,4         ; how many to output
     otir
 
-    ; YM2413: turn off keys - reg to f0, val to f1
-    ld c,$20
-    ld b,6
-    ld hl,VGMYM2413Keys
+    ; YM2413: volumes t0 0
+    ld c,$30
+    ld b,9
+    ld hl,VGMYM2413Registers+$30
 -:  ld a,(Port3EValue)
     set 2,a
     out (PORT_MEMORY_CONTROL),a
       ld a,c
       out ($f0),a
       ld a,(hl)
-      res 4,a
+      and %11110000
       push hl
       pop hl
       out ($f1),a
@@ -1130,17 +1142,15 @@ RestoreVolumes:
     ld b,4              ; how many to output
     otir
 
-    ld hl,VGMYM2413Keys
-    ld c,$20
-    ld b,6
+    ld hl,VGMYM2413Registers
+    ld c,$30
+    ld b,9
 -:  ld a,(Port3EValue)
     set 2,a
     out (PORT_MEMORY_CONTROL),a
       ld a,c
       out ($f0),a
       ld a,(hl)
-      res 4,a
-      res 5,a
       push hl
       pop hl ; delay
       out ($f1),a
@@ -1414,7 +1424,6 @@ _NotVolume:
       and %10010000   ; Is it a tone1?
       cp  %10000000
       jr z,_Tone1
-XX:
       ld a,$ff        ; reset VGMPSGTone1stByte if it's not a tone write
       ld (VGMPSGTone1stByte),a
 
@@ -1424,19 +1433,12 @@ XX:
           ld a,b
           ld (VGMPSGTone1stByte),a
 
-          and %01100000   ; Is it noise?
+          and %01100000   ; Is it ch3?
           cp  %01100000
-          jr nz,+++
+          jp nz,+++
           ld a,b
-          and %11110111
-          cp  %11100011   ; Is it periodic tone2?
-          jr z,+
-          xor a
-          jr ++
-          +:
-          ld a,1
-          ++:
-          ld (VGMPSGNoiseIsPeriodic),a
+          and %00000111
+          ld (VGMPSGNoiseMode),a
           +++:
           jr _PSGAnalysisEnd
 
@@ -1537,87 +1539,21 @@ YM2413:
       ld d,a      ; d = data
     ld a,(Port3EValue)
     out (PORT_MEMORY_CONTROL),a
-    
-    ; Analyse the register
+
+    ; Store the value
     ld a,e
-    and $f0
-    cp $10
-    jr z,_1x
-    cp $20
-    jr z,_2x
-    jp GetData
-
-_1x:    ; FNum low bits
-    push bc
+    cp $39
+    jp nc,GetData
     push hl
-      ld a,e
-      and $0f
-      cp $6
-      jr nc,+  ; don't look at it if it's past $x5
-
-      sla a
-      ld b,0
-      ld c,a
-      ld hl,VGMYM2413FNums
-      add hl,bc
-      ld (hl),d   ; store new value (ignore high byte)
-+:  pop hl
-    pop bc
-    jp GetData
-
-_2x:    ; FNum high bit/block/key
     push bc
-    push hl
-      ld a,e
-      and $0f
-      ld e,a  ; e = channel number
-      cp $6
-      jr nc,+  ; don't look at it if it's past $5 (rhythm mode has 0-5 tone channels)
-
-      sla a   ; I want 2*ch+1
-      inc a
-      ld b,0
-      ld c,a
-      ld hl,VGMYM2413FNums
-      add hl,bc
-      ld a,d
-      and %00000001
-      ld (hl),a   ; store new high bit (ignore low byte)
-
-      ld hl,VGMYM2413Blocks   ; Block
-      ld b,0
-      ld c,e
-      add hl,bc
-      ld a,d
-      rra
-      and %00000111
-      ld (hl),a
-
-      ld hl,VGMYM2413Keys     ; Key
-      ld b,0
-      ld c,e
-      add hl,bc
-      ld (hl),d
-      
-      ; If a YM2413 key down is seen, we want to enable FM.
-      ; We only do it here because some VGMs may have FM initialisation, but enabling FM would mute PSG on a Mark III.
-      ld a,d
-      or a
-      jr z,+
-      ld a,(FMChipEnabled)
-      or a
-      jr nz,+
-      call EnableFM
-
-+:  pop hl
+      ld b,d
+      ld d,0
+      ld hl,VGMYM2413Registers
+      add hl,de
+      ld (hl),b
     pop bc
+    pop hl
     jp GetData
-/*
-YMxxxx: ; discard 2 bytes
-    rst GetByte
-    rst GetByte
-    jp GetData
-*/
 
 
 DoINeedToWait:
@@ -1641,16 +1577,13 @@ DoINeedToWait:
     ld a,(VGMPlayerState)   ; fast forward?
     cp VGMFast
     jr nz,+
-    ; fast: multiply frame length by 4
-    ; so we eat up 4x wait length
-    push hl
-      ld h,d
-      ld l,e
-      add hl,hl
-      add hl,hl
-      ld d,h
-      ld e,l
-    pop hl
+    ; fast: multiply frame length by 8
+    ; so we eat up 8x wait length
+    ex de,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    ex de,hl
 
 +:  or a
     sbc hl,de               ; subtract samples per frame
@@ -2009,74 +1942,41 @@ VolumeVis:
     ret
 
 PianoVisInit:
-    push af
-    push bc
-    push hl
-        call ClearBuffer
-        ; Draw tiles
-        ld hl,VisLocation
-        call VRAMToHL
-        ld hl,PianoTileNumbers
-        ; We may run into the active display so output it slower than otir
-        ld c,$be
-        ld b,64*2
--:      outi
-        jr nz, -
-        ; draw 2 blank lines
-        xor a
-        ld b,32*2*2
-      -:out ($be),a
-        dec b
-        jr nz,-
-
-        ; Define hand sprites
-        ld hl,SpriteTableAddress
-        call VRAMToHL
-        ld a,208+16         ; Hand Y-position
-        ld c,12*2
-      -:out ($be),a
-        dec c
-        jr nz,-
-        ld bc,128
-        add hl,bc
-        call VRAMToHL
-        ld c,12
-      -:xor a               ; Hand x-position
-        out ($be),a
-        nop                 ; Slow down
-        nop
-        ld a,$b0            ; Tile number (-$100 for spriteset 1)
-        out ($be),a
-        nop
-        nop
-        ld a,8
-        out ($be),a
-        nop
-        nop
-        ld a,$b3
-        out ($be),a
-        dec c
-        jr nz,-
-    pop hl
-    pop bc
-    pop af
+    call ClearBuffer
+    ; Draw tiles
+    ld hl,VisLocation
+    call VRAMToHL
+    ld hl,PianoTileNumbers
+    ; We may run into the active display so output it slower than otir
+    ld c,$be
+    ld b,64*2
+-:  outi
+    jr nz, -
+    ; draw 2 blank lines
+    xor a
+    ld b,32*2*2
+-:  out ($be),a
+    dec b
+    jr nz,-
     ret
 
 PianoVisMinValsPSG:
-; Values pre-calculated
-; = minimum values for each note
-; Run through list from left, if PSG value is >= value then it's this note
-;      C   C#    D   D#    E    F   F#    G   G#    A   A#    B
-.dw 7041,
-.dw 6646,6273,5921,5589,5275,4979,4700,4436,4187,3952,3730,3521
-.dw 3323,3137,2961,2794,2638,2490,2350,2218,2093,1976,1865,1760
-.dw 1662,1569,1480,1397,1319,1245,1175,1109,1047, 988, 933, 880
-.dw  831, 784, 740, 699, 659, 622, 587, 554, 523, 494, 466, 440
-.dw  415, 392, 370, 349, 330, 311, 294, 277, 262, 247, 233, 220
-.dw  208, 196, 185, 175, 165, 156, 147, 139, 131, 123, 117, 110
-.dw  104,  98,  93,  87,  82,  78,  73,  69,  65,  62,  58,  55
-.dw   52,  49,  46,  44,  41,  39,  37,  35,  33,  31,  29,  28
-.dw   26,  25,  23,  22,  21,  19,  18,  17,  16,  15,  14,   0
+; These correspond to the octave of values from 932 to 1760, which themselves are the thresholds between "standard" (12TET, A440) notes as PSG half-wavelengths
+; (at 3579545Hz). These values are then the deltas to subtract in turn to determine if a note is "this one", working from high to low. It's complicated!
+; Note  MIDI number  Frequency /Hz  Threshold from previous  PSG value of threshold
+;   C           36           65.40                    63.57                    1760
+;   C#          37           69.29                    67.35                    1661
+;   D           38           73.41                    71.35                    1568
+;   D#          39           77.78                    75.59                    1480
+;   E           40           82.40                    80.09                    1397
+;   F           41           87.30                    84.85                    1318
+;   F#          42           92.49                    89.90                    1244
+;   G           43           97.99                    95.24                    1174
+;   G#          44          103.82                    100.9                    1108
+;   A           45          110.00                    106.9                    1046
+;   A#          46          116.54                    113.2                     988
+;   B           47          123.47                    120.0                     932 
+.dw -932, -56, -58, -62, -66, -70, -74, -79, -83, -88, -93
 
 PianoVisMinValsFM:
 ; Same again, for FM
@@ -2096,117 +1996,125 @@ PianoVisMinValsFM:
 .dw 42888,45438,48140,51002,54035,57248,60652,64259,64259,64259,64259,64259 ; repeated value on purpose! next is past 65535
 
 PianoXPositions:
-; Lookup is much easier and faster (at runtime) than calculating
 ;     C  C#   D  D#   E   F  F#   G  G#   A  A#   B
-.db   0
 .db   0,  2,  4,  6,  8, 12, 14, 16, 18, 20, 22, 24
-.db  28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52
-.db  56, 58, 60, 62, 64, 68, 70, 72, 74, 76, 78, 80
-.db  84, 86, 88, 90, 92, 96, 98,100,102,104,106,108
-.db 112,114,116,118,120,124,126,128,130,132,134,136
-.db 140,142,144,146,148,152,154,156,158,160,162,164
-.db 168,170,172,174,176,180,182,184,186,188,190,192
-.db 196,198,200,202,204,208,210,212,214,216,218,220
-.db 224,226,228,230,232,236,238,240,242,244,246,0
-
-.define n 108   ; y-pos (note)
-.define s n-7   ;       (sharp)
-.define x 208+16;       (not shown)
 PianoYPositions:
-.db x
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,n
-.db n,s,n,s,n,n,s,n,s,n,s,x
-.undef n,s,x
+.db 108,101,108,101,108,108,101,108,101,108,101,108
+
+_Times28:
+.db 0,28,28*2,28*3,28*4,28*5,28*6,28*7,28*8,28*9
 
 PianoVis:
     ; Calculate hand x,y positions
     ; Store as xyxyxy in vis buffer
-    ld ix,VGMPSGTones       ; 3 x 2 bytes
-    ld iy,VisBuffer         ; Where to store x,y
-    ld c,3  ; Number of hands (PSG)
---:
-    push bc
-      ld d,(ix+1)             ; Tone value
-      ld e,(ix+0)
-
-      ; Handle periodic noise when c=1
-      ld a,c
-      cp 1
-      jr nz,+
-      ld a,(VGMPSGNoiseIsPeriodic)
-      cp 1
-      jr nz,+
-      ; I need to divide the frequency by 16, ie, <<4
-      sla e
-      rl  d
-      sla e
-      rl  d
-      sla e
-      rl  d
-      sla e
-      rl  d
-      ; I also want it to use the ch3 volume for ch2
-      dec c
-      +:
-      ; If volume=0 then don't show the hand
-      ld hl,VGMPSGVolumes+3
-      ld b,0
-      scf
-      ccf
-      sbc hl,bc
-      ld a,(hl)
+    ; Skip if no note
+    ; Terminate with a 0
+    ld ix,VGMPSGVolumes     ; 4 bytes, f = silent
+    ld hl,VGMPSGTones       ; 4x2 bytes
+    ld iy,VisBuffer         ; Where to store x,y. We have count at the start, xs from +16 and ys from +32
+    ld b,4  ; Number of hands (PSG)
+--: push bc
+      ; Check volume
+      ld a,(ix+0)
+      ; Convert to 0..f
+      cpl
       and $f
-      cp $f
-      jr z,_NoHand
-      ld b,0          ; counter
-      push iy
-      ld iy,PianoVisMinValsPSG; values to look at
-      scf
-      ccf
-    -:ccf             ; set carry flag -> sbc = <=
-      ld h,(iy+1)     ; get value stored there
-      ld l,(iy+0)
-      sbc hl,de       ; Subtract actual value
-      jr c,+          ; Loop until I find a value less than or equal to the note
-      inc iy
-      inc iy
-      inc b
-      jr -
-    +:pop iy          ; b is now the key number, counting from the left
-      push bc         ; need to preserve c
-          ld c,b
-          ld b,0
-          ld hl,PianoXPositions
-          add hl,bc
-          ld a,(hl)
-          ld (iy+0),a
-          ld hl,PianoYPositions
-          add hl,bc
-          ld a,(hl)
-          ld (iy+1),a
-      pop bc
-      jr +
-      _NoHand:    ; Don't show the hand if applicable
-      ld (iy+1),208+16
-  +:pop bc
-    dec c
-    inc ix
-    inc ix
-    inc iy
-    inc iy
-    jr nz,--
+      ; Skip if silent
+      jp z,_NoHand
+      
+      ; Get the tone
+      ld e,(hl)
+      inc hl
+      ld d,(hl)
+      dec hl
+      ; 0 ->  silent
+      ld a,e
+      or d
+      jp z,_NoHand
+      
+      push hl
+        ; If noise (b=1) then it might be a 1/16 tone
+        ld a,b
+        dec a
+        jp nz,+ ; most common
+        ld a,(VGMPSGNoiseMode)
+        and %100
+        jp nz,_NoHandPop ; No hand for regular noise
+        jp _GetFreqForPeriodic
++:
+        ; We want to scale the PSG value into our target octave
+        ; This means doubling it until it is >880. The max value is 1023.
+        ;    C   C#    D   D#    E    F   F#    G   G#    A  A#   B   C (again)
+        ; 1760 1661 1568 1480 1397 1318 1244 1174 1108 1046 988 932 880
+        ld c,2 ; octave counter
+_ProcessPSGFreq:     
+-:      ld hl,-880-1
+        add hl,de
+        jr c,+
+        sla e
+        rl d
+        inc c
+        jr -
++:
+        ld a,c
+        or a
+        jp m,_NoHandPop
+        ; The highest note is octave 8
+        cp 9
+        jp nc,_NoHandPop
+        
+        ; now we have de in the range 881..1760 and c = octave number
+        ex de,hl
+        ld b,11
+        push iy
+          ld iy,PianoVisMinValsPSG
+        -:ld e,(iy+0)     ; get (negative) value stored there
+          ld d,(iy+1)
+          add hl,de       ; Add value
+          jr nc,+         ; Loop until I find a value where it no-carries which means the negative value was enough to go past 0
+          dec b           ; else it's a lower note
+          inc iy
+          inc iy
+          jr -
++:      pop iy
+        ; Now we are octave c, note b
+        ; Look up the y just from the note
+        ld d,0
+        ld e,b
+        ld hl,PianoYPositions
+        add hl,de
+        ld a,(hl)
+        ld (iy+32),a
+        ; And the x
+        ld hl,PianoXPositions
+        add hl,de
+        ld a,(hl)
+        ; The octave count adds 28px per octave
+        ld hl,_Times28
+        ld b,0
+        add hl,bc
+        ld b,(hl)
+        add a,b
+        ld (iy+16),a
+        ; Next output slot
+        inc iy
+_NoHandPop:
+      pop hl
+_NoHand:    ; Don't show the hand if applicable
+      inc hl
+      inc hl
+      inc ix
+    pop bc
+    djnz --
 
+    SetDebugColour(3,0,3)
     ; Now do FM :)
+    
+    /*
     ld ix,0 ; channel number
     ld c,6  ; Number of hands (FM) - assume rhythm mode (probably 100% of games)
-    --:
+    ; TODO: handle rhythm mode properly, do 9 if in tone mode
+--:
     ; If key isn't pressed then don't bother
     push ix
     pop hl
@@ -2244,19 +2152,19 @@ PianoVis:
     _DEtoNoteNum:
     ld b,0          ; counter
     push iy
-    ld iy,PianoVisMinValsFM ; values to look at
-    scf
-    ccf
-  -:ccf             ; set carry flag -> sbc = >
-    ld h,(iy+1)     ; get value stored there
-    ld l,(iy+0)
-    sbc hl,de       ; Subtract actual value
-    jr nc,+         ; Loop until I find a value greater than the note
-    inc iy
-    inc iy
-    inc b
-    jr -
-  +:dec b           ; b is now the key number, counting from the left
+      ld iy,PianoVisMinValsFM ; values to look at
+      scf
+      ccf
+    -:ccf             ; set carry flag -> sbc = >
+      ld h,(iy+1)     ; get value stored there
+      ld l,(iy+0)
+      sbc hl,de       ; Subtract actual value
+      jr nc,+         ; Loop until I find a value greater than the note
+      inc iy
+      inc iy
+      inc b
+      jr -
+    +:dec b           ; b is now the key number, counting from the left
     pop iy
     push bc         ; need to preserve c
         ld c,b
@@ -2270,136 +2178,186 @@ PianoVis:
         ld a,(hl)
         ld (iy+1),a
     pop bc
-    jr +
+    inc iy
     _NoHand2:    ; Don't show the hand if applicable
-    ld (iy+1),208+16
-  +:dec c
     inc ix
-    inc iy
-    inc iy
-    jr nz,--
+    dec c
+    jp nz,--
+    */
+    ; Store the total count
+    push iy
+    pop hl
+    ld de,$10000-VisBuffer
+    add hl,de
+    ld a,l
+    ld (VisBuffer+0),a
 
     ret
+    
+_GetFreqForPeriodic:
+        ; Set octave counter to -2 rather than 2
+        ld c,-2
+        ; Check the mode
+        ld a,(VGMPSGNoiseMode)
+        and %11
+        cp %11
+        jr nz,+
+        ; Get tone value from from ch 3
+        ld de,(VGMPSGTones+4)
+        ; But is it 0?
+        ld a,d
+        or e
+        jp z,_NoHandPop
+        jp _ProcessPSGFreq
+
++:      ; It is periodic but not tone 3 linked!
+        ld de,$0008 ; equivalent for %00
+        ; Else double e a+1 times
+        inc a
+-:      sla e
+        dec a
+        jr nz,-
+        jp _ProcessPSGFreq
+
 
 DrawPianoVis:
     ; Load hand x,y positions from VisBuffer
     ; Set sprite positions accordingly
 
     .define NumHands 9
-;    push af
-;    push bc
-;    push ix
-;    push hl
 
-        ld c,$be    ; VDP port
+    ld hl,SpriteTableAddress
+    call VRAMToHL
+    
+;    ld a,(VisBuffer+20)
+;    xor 1
+;    ld (VisBuffer+20),a
+;    jr nz,_reverse
 
-        ld hl,SpriteTableAddress
-        call VRAMToHL
-        
-        ld a,(VisBuffer+20)
-        xor 1
-        ld (VisBuffer+20),a
-        jr nz,_reverse
+    ; Get count
+    ld a,(VisBuffer+0)
+    or a
+    jr z,_noHands
+    ld c,a ; save for later
 
-        ld ix,VisBuffer
+    ; Decide if we want big or small hands
+    cp 5
+    jr c,_bigHands
 
-        ld b,NumHands
-      -:ld a,(ix+1)     ; y-pos
-        out ($be),a
-        nop
-        nop
-        nop
-        nop
-        out ($be),a
-        inc ix
-        inc ix
-        dec b
-        jr nz,-
+_smallHands:
+    ld hl,VisBuffer+32
+    ld b,c
+-:  ld a,(hl)     ;  7 ; y-pos
+    out ($be),a   ; 11 -> 38 total
+    inc hl        ;  7
+    djnz -        ; 13
 
-        ld bc,128
-        add hl,bc
-        call VRAMToHL
+    ; Terminate sprite table
+    ld a,$d0
+    out ($be),a
 
-        ld ix,VisBuffer
-        ld b,NumHands   ; How many hands to draw
-        -:
-            ld a,(ix+0) ; 19
-            out ($be),a ; x-pos
-            push af ; 11
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4 = 31
-            in a,($be)  ; skip #
-            pop af  ; 10
-            add a,8 ;  7
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4 = 29
-            out ($be),a ; x-pos
-            push ix ; 15
-            pop ix  ; 14 = 29
-            in a,($be)  ; skip #
-            dec b   ;  4
-            inc ix  ; 10
-            inc ix  ; 10
-            jr nz,- ; 10 = 53 :P
-;    pop hl
-;    pop ix
-;    pop bc
-;    pop af
+    ld hl,SpriteTableAddress+128
+    call VRAMToHL
+    ld hl,VisBuffer+16
+
+    ld b,c
+-:  ld a,(hl)     ;  7
+    sub 2         ;  7
+    out ($be),a   ; 11 -> 36 ; x-pos
+    inc hl        ;  6
+    inc hl        ;  6
+    ld a,$b8      ;  7 ; Small hand tile index
+    out ($be),a   ; 11 -> 30
+    djnz -        ; 13
+    ret
+    
+_bigHands:
+    ld hl,VisBuffer+32
+    ld b,c
+-:  ld a,(hl)     ;  7 ; y-pos
+    out ($be),a   ; 11 -> 31 total
+    inc hl        ;  7
+    nop           ;  4
+    nop           ;  4
+    out ($be),a   ; 11 -> 26 total
+    djnz -        ; 13
+
+    ; Terminate sprite table
+    ld a,$d0
+    out ($be),a
+
+    ld hl,SpriteTableAddress+128
+    call VRAMToHL
+    ld hl,VisBuffer+16
+
+    ld b,c
+-:  ld a,(hl)     ;  7
+    out ($be),a   ; 11 -> 31 ; x-pos
+    ld c,a        ;  4
+    inc hl        ;  6
+    ld a,$b0      ;  7 ; Big hand tile index (LHS)
+    out ($be),a   ; 11 -> 28
+    ld a,c        ;  4
+    add 8         ;  7
+    nop           ;  4
+    out ($be),a   ; 11 -> 26 ; x-pos
+    nop           ;  4
+    nop           ;  4
+    ld a,$b2      ;  7 ; Big hand tile index (RHS)
+    out ($be),a   ; 11 -> 26
+    djnz -        ; 13
     ret
 
+_noHands:
+    ; Just terminate the sprite table
+    ld a,$d0
+    out ($be),a
+    ret
+    
 _reverse:
-        ld ix,VisBuffer+NumHands*2-2
+    ld ix,VisBuffer+NumHands*2-2
 
-        ld b,NumHands
-      -:ld a,(ix+1)     ; y-pos
-        out ($be),a
-        nop
-        nop
-        nop
-        nop
-        out ($be),a
-        dec ix
-        dec ix
-        dec b
-        jr nz,-
+    ld b,NumHands
+-:  ld a,(ix+1)     ; y-pos
+    out ($be),a
+;    nop
+;    nop
+;    nop
+;    nop
+;    out ($be),a
+    dec ix
+    dec ix
+    djnz -
 
-        ld bc,128
-        add hl,bc
-        call VRAMToHL
+    ld bc,128
+    add hl,bc
+    call VRAMToHL
 
-        ld ix,VisBuffer+NumHands*2-2
-        ld b,NumHands   ; How many hands to draw
-        -:
-            ld a,(ix+0) ; 19
-            out ($be),a ; x-pos
-            push af ; 11
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4 = 31
-            in a,($be)  ; skip #
-            pop af  ; 10
-            add a,8 ;  7
-            nop     ;  4
-            nop     ;  4
-            nop     ;  4 = 29
-            out ($be),a ; x-pos
-            push ix ; 15
-            pop ix  ; 14 = 29
-            in a,($be)  ; skip #
-            dec b   ;  4
-            dec ix  ; 10
-            dec ix  ; 10
-            jr nz,- ; 10 = 53 :P
-;    pop hl
-;    pop ix
-;    pop bc
-;    pop af
+    ld ix,VisBuffer+NumHands*2-2
+    ld b,NumHands   ; How many hands to draw
+-:
+    ld a,(ix+0) ; 19
+    out ($be),a ; x-pos
+    push af ; 11
+    nop     ;  4
+    nop     ;  4
+    nop     ;  4
+    nop     ;  4
+    nop     ;  4 = 31
+    in a,($be)  ; skip #
+    pop af  ; 10
+;    add a,8 ;  7
+;    nop     ;  4
+;    nop     ;  4
+;    nop     ;  4 = 29
+;    out ($be),a ; x-pos
+;    push ix ; 15
+;    pop ix  ; 14 = 29
+;    in a,($be)  ; skip #
+    dec b   ;  4
+    dec ix  ; 10
+    dec ix  ; 10
+    jr nz,- ; 10 = 53 :P
     ret
 
 NoVisInit:
@@ -2704,124 +2662,6 @@ PianoTileNumbers:
 Sprites:
 .incbin "art\sprites.tiles.pscompr"
 
-.section "VGM logo displayer" free
-;==============================================================
-; Code
-;==============================================================
-SplashScreenVBlank:
-    ; check input, if anything then skip the splash
-    in a,($dc)
-    and %00111111
-    cp  %00111111
-    ret z
-    ; I want to jump elsewhere
-    ; I think this is some almighty kludge I invented?
-    ; TODO fix this horror
-    inc sp
-    inc sp
-    inc sp
-    inc sp
-    ret
-
-DisplayVGMLogo:
-    call NoSprites
-
-    ; Set all palette entries to white
-    xor a          ; palette index 0
-    out ($bf),a
-    ld a,$c0
-    out ($bf),a     ; CRAM write
-    ld c,32
-    ld a,colour(3,3,3)
-    _WhiteLoop:
-        out ($be),a
-        dec c
-        jr nz,_WhiteLoop
-
-    ; Load tiles
-    ld de,$4000
-    ld hl,LogoTiles
-    call LoadTiles4BitRLENoDI
-
-    ld hl,TilemapAddress(0,1)
-    call VRAMToHL
-
-    ; Draw tiles
-    ld de,$7800
-    ld hl,LogoTileNumbers
-    call LoadTilemapToVRAM
-
-    ; Set VBlank routine
-    ld hl,SplashScreenVBlank
-    ld (VBlankRoutine),hl
-
-    ; Turn screen on
-    ld a,%11100000
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
-
-    ld b,3
-    ld de,LogoPalette
-    ld c,15     ; how many steps to fade in
-
-    _FadeIn:
-    ; Pause 2 frames
-    ei
-    halt
-    ei
-    halt
-
-    ; Move palette
-    push de
-    pop hl
-    call LoadPalette
-    dec c
-    jr nz,_FadeIn
-
-    ld c,20 ; how many frames to wait
-    _WaitLoop:
-        ei
-        halt
-        dec c
-        jr nz,_WaitLoop
-
-    ld b,7
-    ld de,FadeOutPalette
-    ld c,30
-
-    _FadeOut:
-    ; Pause 1 frame
-    ei
-    halt
-    ; Move palette
-    push de
-    pop hl
-    call LoadPalette
-    inc c
-    ld a,c
-    cp 32+16
-    jr nz,_FadeOut
-
-    ret
-
-;==============================================================
-; Data
-;==============================================================
-
-LogoPalette:
-.db colour(2,2,2),colour(1,1,1),colour(0,0,0)
-
-FadeOutPalette:
-.db colour(0,1,0),colour(1,2,1),colour(2,3,2),colour(3,3,3),colour(2,2,2),colour(1,1,1),colour(0,0,0)
-
-LogoTiles:
-.incbin "art\vgm-logo.tiles.pscompr"
-
-LogoTileNumbers:
-.incbin "art\vgm-logo.tilemap.pscompr"
-
-.ends
 
 .section "Save/load settings in BBRAM" FREE
 _Marker:
@@ -3023,7 +2863,7 @@ TurnOffScreen:
 
 ;==============================================================
 ; Sprite disabler
-; Sets all sprites' Y-position to 208, thereby stopping display
+; Sets all sprites' Y-position to $d0, thereby stopping display
 ; of any more sprites than I've used
 ;==============================================================
 .section "No sprites" FREE
@@ -3034,7 +2874,7 @@ NoSprites:
         ld bc,64    ; how many sprites
         ld hl,SpriteTableAddress
         call VRAMToHL
-      -:ld a,208+16 ; for 28-line mode
+      -:ld a,$d0
         out ($be),a
         dec bc
         ld a,b
