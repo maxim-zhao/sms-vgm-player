@@ -2,13 +2,13 @@
 ; by Maxim
 
 ; VRAM mapping stuff
-.define SpriteSet           1       ; 0 for sprites to use tiles 0-255, 1 for 256+
-.define NameTableAddress    $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
-.define SpriteTableAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
+.define SpriteSet               1       ; 0 for sprites to use tiles 0-255, 1 for 256+
+.define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
+.define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
 .define Debug
 
-.function TilemapAddress(x, y) NameTableAddress+2*(x+y*32) 
+.function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32) 
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
 
 .macro SetDebugColour(r,g,b)
@@ -330,11 +330,8 @@ main:
   ld hl,VGMPlayerVBlank
   ld (VBlankRoutine),hl
 
-  ; Fake a VBlank to initialise various stuff
-  call VGMPlayerVBlank
-
   ; Turn screen on
-  ld a,%11100010
+  ld a,%11100000
 ;       ||||| |`- Zoomed sprites -> 16x16 pixels
 ;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
 ;       ||||`---- 30 row/240 line mode
@@ -345,6 +342,9 @@ main:
   out ($bf),a
   ld a,$81
   out ($bf),a
+
+  ; Fake a VBlank to initialise various stuff
+  call VGMPlayerVBlank
 
   /* Auto-play is weird.. it plays super-fast
   call VGMStop
@@ -1716,23 +1716,25 @@ NoVGMFile:
 ;==============================================================
 .section "Visualisations" free
 .define VisLocation TilemapAddress(0,12)
+.define VisTextLocation TilemapAddress(0,16)
 
-.define NumVisRoutines 5
+.struct VisData
+  InitFunction    dw
+  ProcessFunction dw
+  DrawFunction    dw
+  Unused          dw
+.endst
 
-VisRoutines:        ; calculation for vis, done after data is processed
-.dw PianoVis,       FrequencyVis,         VolumeVis,            CalcSnow,       NoRoutine
+VisRoutines:
+.dstruct instanceof VisData nolabels data InitPianoVis,     ProcessPianoVis,      DrawPianoVis
+.dstruct instanceof VisData nolabels data InitFrequencyVis, ProcessFrequencyVis,  DrawVisBufferAsBars
+.dstruct instanceof VisData nolabels data InitVolumeVis,    ProcessVolumeVis,     DrawVisBufferAsBars
+.dstruct instanceof VisData nolabels data InitSnowVis,      ProcessSnowVis,       DrawSnowVis
 
-VisDisplayRoutines: ; VBlank display update
-.dw DrawPianoVis,   DrawVisBufferAsBars,  DrawVisBufferAsBars,  UpdateSnow,     NoRoutine
-
-VisInitRoutines:    ; Initialisation
-.dw PianoVisInit,   NoRoutine,            NoRoutine,            InitSnow,       NoVisInit
+.define NumVisRoutines _sizeof_VisRoutines/_sizeof_VisData
 
 NoRoutine:
     ret
-
-VisRoutinesStrings:
-.dw PianoVisString,FrequencyVisString,VolumeVisString,SnowVisString,NoVisString
 
 NoVisString:
 .db "     Visualisation disabled     ",0
@@ -1768,38 +1770,29 @@ InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
     cp NumVisRoutines
     jr c,+
     xor a ; zero if out of range
-+:  add a,a ; a *= 2
++:  add a,a ; a *= 8
+    add a,a
+    add a,a
     ld d,0
     ld e,a
-
-    ld iy,VisRoutinesStrings    ; Get location of string
-    add iy,de
-    ld h,(iy+1)
-    ld l,(iy+0)
-    ld iy,VisLocation+32*2*4    ; Where to draw it
-    call WriteASCII             ; Draw it
-
-    ld iy,VisInitRoutines       ; Do initialisation
-    add iy,de
-    ld h,(iy+1)
-    ld l,(iy+0)
-    push de
+    ld ix,VisRoutines
+    add ix,de
+    
+    ld h,(ix+VisData.InitFunction+1)
+    ld l,(ix+VisData.InitFunction+0)
+    push ix
       call callHL
-    pop de
+    pop ix
 
-    ld iy,VisDisplayRoutines    ; Update VBlank routine
-    add iy,de
-    ld b,(iy+1)
-    ld c,(iy+0)
-    ld (VisDisplayRoutine),bc
+    ld h,(ix+VisData.DrawFunction+1)
+    ld l,(ix+VisData.DrawFunction+0)
+    ld (VisDisplayRoutine),hl
 
-    ld iy,VisRoutines           ; and non-VBlank routine
-    add iy,de
-    ld b,(iy+1)
-    ld c,(iy+0)
-    ld (VisRoutine),bc
+    ld h,(ix+VisData.ProcessFunction+1)
+    ld l,(ix+VisData.ProcessFunction+0)
+    ld (VisRoutine),hl
 
-    xor a                      ; Reset flag
+    xor a
     ld (VisChanged),a
     ret
 
@@ -1869,7 +1862,7 @@ DrawVisBufferAsBars:
     jr nz,--
     ret
 
-FrequencyVis:
+ProcessFrequencyVis:
     call ClearBuffer
 
     ld ix,VGMPSGTones
@@ -1931,7 +1924,7 @@ FrequencyVis:
         jr nz,_AddNoise
     ret
 
-VolumeVis:
+ProcessVolumeVis:
     call ClearBuffer
 
     ld hl,VGMPSGVolumes
@@ -1950,7 +1943,24 @@ VolumeVis:
     jr nz,--
     ret
 
-PianoVisInit:
+InitPianoVis:
+    ld hl,PianoVisString
+    ld iy,VisTextLocation
+    call WriteASCII
+    
+    ; Set sprites to 8x16 mode    
+    ld a,%11100010
+  ;       ||||| |`- Zoomed sprites -> 16x16 pixels
+  ;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
+  ;       ||||`---- 30 row/240 line mode
+  ;       |||`----- 28 row/224 line mode
+  ;       ||`------ VBlank interrupts
+  ;       |`------- Enable display
+  ;       `-------- Must be set (VRAM size bit)
+    out ($bf),a
+    ld a,$81
+    out ($bf),a
+
     call ClearBuffer
     ; Draw tiles
     ld hl,VisLocation
@@ -1967,9 +1977,10 @@ PianoVisInit:
 -:  out ($be),a
     dec b
     jr nz,-
+    
     ret
 
-PianoVisMinValsPSG:
+ProcessPianoVisMinValsPSG:
 ; These correspond to the octave of values from 932 to 1760, which themselves are the thresholds between "standard" (12TET, A440) notes as PSG half-wavelengths
 ; (at 3579545Hz). These values are then the deltas to subtract in turn to determine if a note is "this one", working from high to low. It's complicated!
 ; Note  MIDI number  Frequency /Hz  Threshold from previous  PSG value of threshold
@@ -1987,7 +1998,7 @@ PianoVisMinValsPSG:
 ;   B           47          123.47                    120.0                     932 
 .dw -932, -56, -58, -62, -66, -70, -74, -79, -83, -88, -93
 
-PianoVisMinValsFM:
+ProcessPianoVisMinValsFM:
 ; Same again, for FM
 ; We assume the FNum/Block have been scaled to be >255/whatever
 ; We have these minimum values for notes:
@@ -2018,7 +2029,7 @@ PianoYPositions:
 _Times28:
 .db 0,28,28*2,28*3,28*4,28*5,28*6,28*7,28*8,28*9
 
-PianoVis:
+ProcessPianoVis:
     ; Calculate hand x,y positions
     ; Store as xyxyxy in vis buffer
     ; Skip if no note
@@ -2081,7 +2092,7 @@ _ProcessPSGFreq:
         ex de,hl
         ld b,11
         push iy
-          ld iy,PianoVisMinValsPSG
+          ld iy,ProcessPianoVisMinValsPSG
         -:ld e,(iy+0)     ; get (negative) value stored there
           ld d,(iy+1)
           add hl,de       ; Add value
@@ -2160,7 +2171,7 @@ _NoHand:    ; Don't show the hand if applicable
 +:    ; Now we want to find which note hl corresponds to.
       push iy
         ld c,0
-        ld iy,PianoVisMinValsFM
+        ld iy,ProcessPianoVisMinValsFM
 -:      ld e,(iy+0)
         ld d,(iy+1)
         add hl,de       ; Add value
@@ -2266,7 +2277,7 @@ DrawPianoVis:
 
     .define NumHands 9
 
-    ld hl,SpriteTableAddress
+    ld hl,SpriteTableBaseAddress
     call VRAMToHL
     
 ;    ld a,(VisBuffer+20)
@@ -2296,7 +2307,7 @@ _smallHands:
     ld a,$d0
     out ($be),a
 
-    ld hl,SpriteTableAddress+128
+    ld hl,SpriteTableBaseAddress+128
     call VRAMToHL
     ld hl,VisBuffer+16
 
@@ -2326,7 +2337,7 @@ _bigHands:
     ld a,$d0
     out ($be),a
 
-    ld hl,SpriteTableAddress+128
+    ld hl,SpriteTableBaseAddress+128
     call VRAMToHL
     ld hl,VisBuffer+16
 
@@ -2354,55 +2365,26 @@ _noHands:
     out ($be),a
     ret
     
-_reverse:
-    ld ix,VisBuffer+NumHands*2-2
 
-    ld b,NumHands
--:  ld a,(ix+1)     ; y-pos
-    out ($be),a
-;    nop
-;    nop
-;    nop
-;    nop
-;    out ($be),a
-    dec ix
-    dec ix
-    djnz -
-
-    ld bc,128
-    add hl,bc
-    call VRAMToHL
-
-    ld ix,VisBuffer+NumHands*2-2
-    ld b,NumHands   ; How many hands to draw
--:
-    ld a,(ix+0) ; 19
-    out ($be),a ; x-pos
-    push af ; 11
-    nop     ;  4
-    nop     ;  4
-    nop     ;  4
-    nop     ;  4
-    nop     ;  4 = 31
-    in a,($be)  ; skip #
-    pop af  ; 10
-;    add a,8 ;  7
-;    nop     ;  4
-;    nop     ;  4
-;    nop     ;  4 = 29
-;    out ($be),a ; x-pos
-;    push ix ; 15
-;    pop ix  ; 14 = 29
-;    in a,($be)  ; skip #
-    dec b   ;  4
-    dec ix  ; 10
-    dec ix  ; 10
-    jr nz,- ; 10 = 53 :P
-    ret
-
-NoVisInit:
+InitNoVis:
   call ClearBuffer
   call DrawVisBufferAsBars
+  ret
+  
+InitVolumeVis:
+  call ClearBuffer
+  call DrawVisBufferAsBars
+  ld hl,VolumeVisString
+  ld iy,VisTextLocation
+  call WriteASCII
+  ret
+
+InitFrequencyVis:
+  call ClearBuffer
+  call DrawVisBufferAsBars
+  ld hl,FrequencyVisString
+  ld iy,VisTextLocation
+  call WriteASCII
   ret
 
 .define NumSnowFlakes 32
@@ -2411,10 +2393,23 @@ SnowText:
 .db 10,"  Dancing snow..",10,10
 .db "               ..with flashing",0
 
-InitSnow:
+InitSnowVis:
     push af
     push bc
     push hl
+        ; Set sprites to 8x8 mode    
+        ld a,%11100000
+      ;       ||||| |`- Zoomed sprites -> 16x16 pixels
+      ;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
+      ;       ||||`---- 30 row/240 line mode
+      ;       |||`----- 28 row/224 line mode
+      ;       ||`------ VBlank interrupts
+      ;       |`------- Enable display
+      ;       `-------- Must be set (VRAM size bit)
+        out ($bf),a
+        ld a,$81
+        out ($bf),a
+
         ; Blank vis area
         ld hl,VisLocation
         call VRAMToHL
@@ -2432,7 +2427,7 @@ InitSnow:
         call WriteASCII
 
         ; Define sprites
-        ld hl,SpriteTableAddress+128
+        ld hl,SpriteTableBaseAddress+128
         call VRAMToHL
         ld c,NumSnowFlakes
       -:xor a
@@ -2444,7 +2439,7 @@ InitSnow:
         dec c
         jr nz,-
 
-        ; Fill buffer with initial random poitions
+        ; Fill buffer with initial random positions
         ld hl,VisBuffer
         ld c,NumSnowFlakes*2
         -:
@@ -2459,7 +2454,7 @@ InitSnow:
     pop af
     ret
 
-CalcSnow:
+ProcessSnowVis:
     push ix
     push af
     push bc
@@ -2529,7 +2524,7 @@ CalcSnow:
     pop ix
     ret
         
-UpdateSnow:
+DrawSnowVis:
     push af
     push bc
     push hl
@@ -2554,7 +2549,7 @@ UpdateSnow:
         out ($be),a
 
         ; Display sprites
-        ld hl,SpriteTableAddress+128
+        ld hl,SpriteTableBaseAddress+128
         call VRAMToHL
         ; Write X positions
         ld c,NumSnowFlakes
@@ -2575,7 +2570,7 @@ UpdateSnow:
         dec c
         jr nz,-
 
-        ld hl,SpriteTableAddress
+        ld hl,SpriteTableBaseAddress
         call VRAMToHL
         ; Write Y positions
         ld c,NumSnowFlakes
@@ -2640,8 +2635,8 @@ VdpData:
 ;     ||`----- 28 row/224 line mode
 ;     |`------ Enable VBlank interrupts
 ;     `------- Enable display
-.db (NameTableAddress>>10) |%11110001,$82
-.db (SpriteTableAddress>>7)|%10000001,$85
+.db (TilemapBaseAddress>>10) |%11110001,$82
+.db (SpriteTableBaseAddress>>7)|%10000001,$85
 .db (SpriteSet<<2)         |%11111011,$86
 .db $0|$f0,$87
 ;    `-------- Border palette colour (sprite palette)
@@ -2909,19 +2904,12 @@ TurnOffScreen:
 .section "No sprites" FREE
 NoSprites:
     push af
-    push bc
     push hl
-        ld bc,64    ; how many sprites
-        ld hl,SpriteTableAddress
+        ld hl,SpriteTableBaseAddress
         call VRAMToHL
-      -:ld a,$d0
+        ld a,$d0
         out ($be),a
-        dec bc
-        ld a,b
-        or c
-        jp nz,-
     pop hl
-    pop bc
     pop af
     ret
 .ends
@@ -3116,7 +3104,7 @@ WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
     push hl
         ld b,$00
         ld c,a
-        ld hl,NameTableAddress
+        ld hl,TilemapBaseAddress
         add hl,bc
         add hl,bc
         add hl,bc
