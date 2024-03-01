@@ -928,19 +928,19 @@ VGMInitialise:
     sbc hl,de
     jr c,+
     inc bc
-+:  ld hl,0
++:  ld hl, TilemapAddress(10, 9)
+    call VRAMToHL
+    ld hl,0
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
-    push hl
-      ld hl, TilemapAddress(10, 9)
-      call VRAMToHL
-    pop hl
     ld a,c
     call Hex2BCD
     call WriteNumber
     ld a,$1a   ; Draw colon (faster than redefining name table address)
     out ($be),a
-    xor a
+    push hl
+    pop hl
+    ld a,0
     out ($be),a
     ld a,l
     call Hex2BCD
@@ -971,12 +971,14 @@ VGMInitialise:
     call WriteNumber
     ld a,$1a   ; Draw colon (faster than redefining name table address)
     out ($be),a
-    xor a
+    push hl
+    pop hl
+    ld a,0
     out ($be),a
     ld a,l
     call Hex2BCD
     call WriteNumber
-
+    
     ; Get loop information
     ld a,$1c
     call VGMOffsetToPageAndOffset   ; now a=page/0, hl=offset
@@ -2532,7 +2534,6 @@ DrawSnowVis:
         ld a,(VGMPSGVolumes+3)
         cpl
         and $0f
-;        cp $0
         jr z,+
         ; noise on -> light cyan
         ld c,colour(2,3,3)
@@ -2562,8 +2563,9 @@ DrawSnowVis:
         rra
         add a,(ix+NumSnowFlakes)
         rra
+        rra
         rra         ; look at a higher bit for slower changing
-        and %110
+        and %11
         add a,$b4   ; start of snowflake sprites
         out ($be),a ; skip sprite number
         inc ix
@@ -2695,7 +2697,7 @@ PianoTileNumbers:
 .include "art\piano.tilemap.inc"
 
 Sprites:
-.incbin "art\sprites.tiles.pscompr"
+.incbin "art\sprites.tiles.withdupes.pscompr"
 
 
 .section "Save/load settings in BBRAM" FREE
@@ -3124,7 +3126,7 @@ WriteDigit:     ; writes the digit in a
     out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
     push hl
     pop hl
-    ld a,%00000000
+    ld a,0
     out ($BE),a
     ret
 
