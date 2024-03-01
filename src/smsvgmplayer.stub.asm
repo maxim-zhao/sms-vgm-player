@@ -77,6 +77,7 @@ PaletteNumber                   db
 RandomSR                        dw ; Random number generator shift register, needs seeding
 GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
+VDPRegister81Value              db
 .ende
 
 .include "PhantasyStardecompressors.asm"
@@ -220,17 +221,20 @@ main:
   ; b = size of data
   ; c = port
   ; otir = while (b>0) do {out (hl),c; b--}
-  ld hl,VdpData
-  ld b,_sizeof_VdpData
+  ld hl,VDPRegisterInitData
+  ld b,_sizeof_VDPRegisterInitData
   ld c,$bf
   otir
-  
+    
   ; Clear RAM
   ld hl,$c000+1
   ld de,$c000+2
   ld bc,$1ff0-1
   ld (hl),0
   ldir
+
+  ld a,(VDPRegisterInitData+2)
+  ld (VDPRegister81Value),a
 
   call CheckPort3EValue
 
@@ -331,27 +335,15 @@ main:
   ld (VBlankRoutine),hl
 
   ; Turn screen on
-  ld a,%11100000
-;       ||||| |`- Zoomed sprites -> 16x16 pixels
-;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
-;       ||||`---- 30 row/240 line mode
-;       |||`----- 28 row/224 line mode
-;       ||`------ VBlank interrupts
-;       |`------- Enable display
-;       `-------- Must be set (VRAM size bit)
+  ld a,(VDPRegister81Value)
+  or %01000000
+  ld (VDPRegister81Value),a
   out ($bf),a
   ld a,$81
   out ($bf),a
 
   ; Fake a VBlank to initialise various stuff
   call VGMPlayerVBlank
-
-  /* Auto-play is weird.. it plays super-fast
-  call VGMStop
-  call VGMUpdate
-  call VGMPlayPause
-  call VGMUpdate
-  */
 
   ei
 InfiniteLoop:   ; to stop the program
@@ -1688,21 +1680,11 @@ NoVGMFile:
     ld iy,TilemapAddress(0,0)
     ld hl,NoVGMText
     call WriteASCII
-/*
-    ; Debug: display what we've found
-    ld hl,TilemapAddress(0,0)
-    call VRAMToHL
-    ld c,160
-    ld hl,$8000
-    _Loop1:
-        ld a,(hl)
-        call WriteNumber
-        inc hl
-        dec c
-        jr nz,_Loop1
-*/
+
     ; Main screen turn on
-    ld a,%11000000
+    ld a,(VDPRegister81Value)
+    or %01000000
+    ld (VDPRegister81Value),a
     out ($bf),a
     ld a,$81
     out ($bf),a
@@ -1951,14 +1933,9 @@ InitPianoVis:
     call WriteASCII
     
     ; Set sprites to 8x16 mode    
-    ld a,%11100010
-  ;       ||||| |`- Zoomed sprites -> 16x16 pixels
-  ;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
-  ;       ||||`---- 30 row/240 line mode
-  ;       |||`----- 28 row/224 line mode
-  ;       ||`------ VBlank interrupts
-  ;       |`------- Enable display
-  ;       `-------- Must be set (VRAM size bit)
+    ld a,(VDPRegister81Value)
+    or %00000010
+    ld (VDPRegister81Value),a
     out ($bf),a
     ld a,$81
     out ($bf),a
@@ -2389,7 +2366,7 @@ InitFrequencyVis:
   call WriteASCII
   ret
 
-.define NumSnowFlakes 32
+.define NumSnowFlakes 64
 
 SnowText:
 .db 10,"  Dancing snow..",10,10
@@ -2400,14 +2377,9 @@ InitSnowVis:
     push bc
     push hl
         ; Set sprites to 8x8 mode    
-        ld a,%11100000
-      ;       ||||| |`- Zoomed sprites -> 16x16 pixels
-      ;       ||||| `-- Doubled sprites -> 2 tiles per sprite, 8x16
-      ;       ||||`---- 30 row/240 line mode
-      ;       |||`----- 28 row/224 line mode
-      ;       ||`------ VBlank interrupts
-      ;       |`------- Enable display
-      ;       `-------- Must be set (VRAM size bit)
+        ld a,(VDPRegister81Value)
+        and %11111101
+        ld (VDPRegister81Value),a
         out ($bf),a
         ld a,$81
         out ($bf),a
@@ -2442,14 +2414,20 @@ InitSnowVis:
         jr nz,-
 
         ; Fill buffer with initial random positions
+        ; X is random, Y should be uniform!
+        ; 64 sprites spread over 192 lines is one every 3 lines
         ld hl,VisBuffer
-        ld c,NumSnowFlakes*2
-        -:
-        call GetRandomNumber
+        ld b,NumSnowFlakes
+-:      call GetRandomNumber
         ld (hl),a
         inc hl
-        dec c
-        jr nz,-
+        djnz -
+        ld b,NumSnowFlakes
+        xor a
+-:      ld (hl),a
+        add a,3
+        inc hl
+        djnz -
 
     pop hl
     pop bc
@@ -2510,12 +2488,13 @@ ProcessSnowVis:
     ld a,(ix+0) ; get current value
     inc a       ; increment
     ld (ix+0),a ; that's what I want
-    cp $ff-$20  ; If it's time to change..
+    cp 192  ; If it's time to change..
     jr nz,+
+    ld a,-8
+    ld (ix+0),a
     ; I want a new random x-pos
     call GetRandomNumber
-    and 248
-    ld (ix+(-NumSnowFlakes)),a
+    ld (ix-NumSnowFlakes),a
     +:
     inc ix
     dec c
@@ -2527,66 +2506,61 @@ ProcessSnowVis:
     ret
         
 DrawSnowVis:
-    push af
-    push bc
-    push hl
-        ; Noise flashing
-        ld a,(VGMPSGVolumes+3)
-        cpl
-        and $0f
-        jr z,+
-        ; noise on -> light cyan
-        ld c,colour(2,3,3)
-        jr ++
-      +:; noise off -> white
-        ld c,colour(3,3,3)
+    ; Noise flashing
+    ld a,(VGMPSGVolumes+3)
+    cpl
+    and $0f
+    jr z,+
+    ; noise on -> light cyan
+    ld c,colour(2,3,3)
+    jr ++
+  +:; noise off -> white
+    ld c,colour(3,3,3)
 
-     ++:; Write colour to CRAM
-        ld a,22                ; palette index 22
-        out ($bf),a
-        ld a,%11000000         ; CRAM write
-        out ($bf),a
-        ld a,c                 ; data
-        out ($be),a
+ ++:; Write colour to CRAM
+    ld a,22                ; palette index 22
+    out ($bf),a
+    ld a,%11000000         ; CRAM write
+    out ($bf),a
+    ld a,c                 ; data
+    out ($be),a
 
-        ; Display sprites
-        ld hl,SpriteTableBaseAddress+128
-        call VRAMToHL
-        ; Write X positions
-        ld c,NumSnowFlakes
-        ld ix,VisBuffer
-      -:ld a,(ix+0)
-        out ($be),a
-        ; Sprite number $b4+
-        ld a,c      ; snowflake number
-        add a,(ix+0); x-pos
-        rra
-        add a,(ix+NumSnowFlakes)
-        rra
-        rra
-        rra         ; look at a higher bit for slower changing
-        and %11
-        add a,$b4   ; start of snowflake sprites
-        out ($be),a ; skip sprite number
-        inc ix
-        dec c
-        jr nz,-
+    ; Display sprites
+    ld hl,SpriteTableBaseAddress+128
+    call VRAMToHL
 
-        ld hl,SpriteTableBaseAddress
-        call VRAMToHL
-        ; Write Y positions
-        ld c,NumSnowFlakes
-        ld hl,VisBuffer+NumSnowFlakes
-      -:ld a,(hl)
-        out ($be),a ; output it
-        inc hl
-        dec c
-        nop
-        jr nz,-
+    ; Write X positions
+    ld c,NumSnowFlakes
+    ld ix,VisBuffer
+  -:ld a,(ix+0)
+    out ($be),a
+    ; Sprite number $b4+
+    ld a,c      ; snowflake number
+    add a,(ix+0); x-pos
+    rra
+    add a,(ix+NumSnowFlakes)
+    rra
+    rra
+    rra         ; look at a higher bit for slower changing
+    and %11
+    add a,$b4   ; start of snowflake sprites
+    out ($be),a ; skip sprite number
+    inc ix
+    dec c
+    jr nz,-
 
-    pop hl
-    pop bc
-    pop af
+    ld hl,SpriteTableBaseAddress
+    call VRAMToHL
+    ; Write Y positions
+    ld c,NumSnowFlakes
+    ld hl,VisBuffer+NumSnowFlakes
+  -:ld a,(hl)
+    out ($be),a ; output it
+    inc hl
+    dec c
+    nop
+    jr nz,-
+
     ret
 
 GetRandomNumber:
@@ -2619,7 +2593,7 @@ GetRandomNumber:
 ;==============================================================
 ; VDP initialisation data
 ;==============================================================
-VdpData:
+VDPRegisterInitData:
 .db %00000100,$80
 ;    |||||||`- Disable synch
 ;    ||||||`-- Enable extra height modes
@@ -2629,7 +2603,7 @@ VdpData:
 ;    ||`------ Blank leftmost column for scrolling
 ;    |`------- Fix top 2 rows during horizontal scrolling
 ;    `-------- Fix right 8 columns during vertical scrolling
-.db %10000000,$81
+.db %10100000,$81
 ;     ||||||`- Zoomed sprites -> 16x16 pixels
 ;     |||||`-- Doubled sprites -> 2 tiles per sprite, 8x16
 ;     ||||`--- Mode5 bit on PBC - must be 0
@@ -2890,7 +2864,9 @@ ClearVRAM:
 .section "Turn off screen" FREE
 TurnOffScreen:
     push af
-        ld a,%10000100  ; 28 line mode
+        ld a,(VDPRegister81Value)
+        and %10111111
+        ld (VDPRegister81Value),a
         out ($bf),a
         ld a,$81
         out ($bf),a
