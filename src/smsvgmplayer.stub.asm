@@ -257,30 +257,30 @@ main:
   ld c,0
   call LoadPalette
 
+.function TileVRAMAddressFromIndex(n) $4000+n*32
+
   ; Load tiles
-  ld de,$4000     ; Load font
+  ld de,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
   ld hl,TileData
   call LoadTiles4BitRLENoDI
 
-  ld de,$60*32+$4000     ; Load vis tiles
+  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
   ld hl,ScaleData
   call LoadTiles4BitRLENoDI
 
-  .define BigNumbersOffset 105
-
-  ld de,32*BigNumbersOffset+$4000
+  ld de,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
   ld hl,BigNumbers
   call LoadTiles4BitRLENoDI
 
-  ld de,32*146+$4000
+  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
   ld hl,Pad
   call LoadTiles4BitRLENoDI
 
-  ld de,32*256+$4000
+  ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
   ld hl,PianoTiles
   call LoadTiles4BitRLENoDI
 
-  ld de,$6160
+  ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
   ld hl,LogoTiles
   call LoadTiles4BitRLENoDI
   
@@ -288,7 +288,7 @@ main:
   ld de,$7000
   call LoadTilemapToVRAM
 
-  ld de,32*$1b0+$4000
+  ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
   ld hl,Sprites
   call LoadTiles4BitRLENoDI
 
@@ -696,7 +696,7 @@ DrawLargeDigit:
   push hl
     sla a ; multiply by 2
     ld c,a
-    add a,BigNumbersOffset
+    add a,TileIndex_BigNumbers
     out ($be),a               ; 11 -> start
     nop                       ; 4
     nop                       ; 4
@@ -705,7 +705,7 @@ DrawLargeDigit:
     out ($be),a               ; 11 -> 27 cycles
     nop                       ; 4
     ld a,c                    ; 4
-    add a,BigNumbersOffset+1  ; 7
+    add a,TileIndex_BigNumbers+1  ; 7
     out ($be),a               ; 11 -> 26 cycles
     nop                       ; 4
     nop                       ; 4
@@ -720,7 +720,7 @@ DrawLargeDigit:
       call VRAMToHL
     pop bc
 
-    add a,BigNumbersOffset+20
+    add a,TileIndex_BigNumbers+20
     out ($be),a
     nop                       ; 4
     nop                       ; 4
@@ -729,7 +729,7 @@ DrawLargeDigit:
     out ($be),a
     nop                       ; 4
     ld a,c
-    add a,BigNumbersOffset+21
+    add a,TileIndex_BigNumbers+21
     out ($be),a
     nop                       ; 4
     nop                       ; 4
@@ -936,7 +936,7 @@ VGMInitialise:
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,$1a   ; Draw colon (faster than redefining name table address)
+    ld a,':' - $20   ; Draw colon (faster than redefining name table address)
     out ($be),a
     push hl
     pop hl
@@ -969,7 +969,7 @@ VGMInitialise:
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,$1a   ; Draw colon (faster than redefining name table address)
+    ld a,':' - $20  ; Draw colon (faster than redefining name table address)
     out ($be),a
     push hl
     pop hl
@@ -2367,7 +2367,7 @@ _smallHands:
     out ($be),a   ; 11 -> 36 ; x-pos
     inc hl        ;  6
     nop           ;  4
-    ld a,$b8      ;  7 ; Small hand tile index
+    ld a,TileIndex_Sprite_SmallHand ;  7 ; Small hand tile index
     out ($be),a   ; 11 -> 28
     djnz -        ; 13
     ret
@@ -2396,7 +2396,7 @@ _bigHands:
     out ($be),a   ; 11 -> 31 ; x-pos
     ld c,a        ;  4
     inc hl        ;  6
-    ld a,$b0      ;  7 ; Big hand tile index (LHS)
+    ld a,TileIndex_Sprite_BigHand ;  7 ; Big hand tile index (LHS)
     out ($be),a   ; 11 -> 28
     ld a,c        ;  4
     add 8         ;  7
@@ -2404,7 +2404,7 @@ _bigHands:
     out ($be),a   ; 11 -> 26 ; x-pos
     nop           ;  4
     nop           ;  4
-    ld a,$b2      ;  7 ; Big hand tile index (RHS)
+    ld a,TileIndex_Sprite_BigHand + 2 ;  7 ; Big hand tile index (RHS)
     out ($be),a   ; 11 -> 26
     djnz -        ; 13
     ret
@@ -2579,7 +2579,7 @@ DrawSnowVis:
   rra
   rra         ; look at a higher bit for slower changing
   and %11
-  add a,$b4   ; start of snowflake sprites
+  add a,TileIndex_Sprite_Snow   ; start of snowflake sprites
   out ($be),a ; skip sprite number
   inc ix
   dec c
@@ -2727,6 +2727,19 @@ Palettes:
 .db colour(0,0,0),colour(1,1,1),colour(2,2,2)  ; greyscale
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
+.enum 0 export ; Tile indices
+TileIndex_Font          dsb 96
+TileIndex_Scale         dsb 8   ; 0-8
+TileIndex_BigNumbers    dsb 41  ; 10*4 + 1 for colon dot
+TileIndex_3DPad         dsb 110
+TileIndex_Piano         dsb 11
+TileIndex_Logo          dsb 33
+TileIndexPadding        db ; Sprites need to be on a multiple of 2
+TileIndex_Sprite_BigHand  dsb 4
+TileIndex_Sprite_SmallHand  dsb 2
+TileIndex_Sprite_Snow  dsb 4
+.ende
+
 TileData:
 .incbin "fonts\ZXChicagoPod.tiles.withdupes.pscompr"
 
@@ -2757,7 +2770,7 @@ PianoTileNumbers:
 .incbin "art\piano.tilemap.bin"
 
 Sprites:
-.incbin "art\sprites.tiles.withdupes.pscompr"
+.incbin "art\sprites.tiles.8x16.pscompr"
 
 LogoTiles:
 .incbin "art\screensaver.tiles.pscompr"
