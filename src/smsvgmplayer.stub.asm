@@ -280,6 +280,14 @@ main:
   ld hl,PianoTiles
   call LoadTiles4BitRLENoDI
 
+  ld de,$6160
+  ld hl,LogoTiles
+  call LoadTiles4BitRLENoDI
+  
+  ld hl,LogoTileNumbers
+  ld de,$7000
+  call LoadTilemapToVRAM
+
   ld de,32*$1b0+$4000
   ld hl,Sprites
   call LoadTiles4BitRLENoDI
@@ -1099,7 +1107,7 @@ MuteAllSound:
     ld b,4         ; how many to output
     otir
 
-    ; YM2413: volumes t0 0
+    ; YM2413: volumes to $f
     ld c,$30
     ld b,9
     ld hl,VGMYM2413Registers+$30
@@ -1110,6 +1118,7 @@ MuteAllSound:
       out ($f0),a
       ld a,(hl)
       and %11110000
+      or  %00001111
       push hl
       pop hl
       out ($f1),a
@@ -1132,7 +1141,7 @@ RestoreVolumes:
     ld b,4              ; how many to output
     otir
 
-    ld hl,VGMYM2413Registers
+    ld hl,VGMYM2413Registers+$30
     ld c,$30
     ld b,9
 -:  ld a,(Port3EValue)
@@ -1714,22 +1723,10 @@ VisRoutines:
 .dstruct instanceof VisData nolabels data InitFrequencyVis, ProcessFrequencyVis,  DrawVisBufferAsBars
 .dstruct instanceof VisData nolabels data InitVolumeVis,    ProcessVolumeVis,     DrawVisBufferAsBars
 .dstruct instanceof VisData nolabels data InitSnowVis,      ProcessSnowVis,       DrawSnowVis
+.dstruct instanceof VisData nolabels data InitLogoVis,      ProcessLogoVis,       DrawLogoVis
+.dstruct instanceof VisData nolabels data InitNoVis,        NoRoutine,            NoRoutine
 
 .define NumVisRoutines _sizeof_VisRoutines/_sizeof_VisData
-
-NoRoutine:
-    ret
-
-NoVisString:
-.db "     Visualisation disabled     ",0
-VolumeVisString:
-.db " Tone 1  Tone 2  Tone 3  Noise  ",0
-FrequencyVisString:
-.db "100   Freq   200  /Hz  500 1k 7k",0
-PianoVisString:
-.db "       Dave's Piano-matic       ",0
-SnowVisString:
-.db 0
 
 NextVis:
   push af
@@ -1744,6 +1741,7 @@ NextVis:
     ld (VisChanged),a
     call SaveSettings
   pop af
+NoRoutine:
   ret
 
 InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
@@ -1800,6 +1798,9 @@ UpdateVis:
     pop af
     pop hl
     ret
+.ends
+
+.section "VIs buffer helpers" free
 
 ClearBuffer:   ; uses a,bc,de,hl
     ; Clear VisBuffer to all 0
@@ -1845,6 +1846,44 @@ DrawVisBufferAsBars:
     dec c
     jr nz,--
     ret
+    
+BlankVisArea:
+  ; Blank vis area
+  ld hl,VisLocation
+  call VRAMToHL
+  ld bc,32*2*5
+-:xor a
+  out ($be),a
+  dec bc
+  ld a,b
+  or c
+  jr nz,-
+  ret
+  
+NormalTilemap:
+  ld hl,$8200 | %11110001 | (TilemapBaseAddress >> 10)
+  call SetVDPRegister
+  ; No scrolling
+  ld hl,$8700
+  call SetVDPRegister
+  ld hl,$8800
+  call SetVDPRegister
+  ret
+.ends
+
+.section "Frequency bars vis" free
+FrequencyVisString:
+.db "100   Freq   200  /Hz  500 1k 7k",0
+
+InitFrequencyVis:
+  call NormalTilemap    
+  call NoSprites
+  call ClearBuffer
+  call DrawVisBufferAsBars
+  ld hl,FrequencyVisString
+  ld iy,VisTextLocation
+  call WriteASCII
+  ret
 
 ProcessFrequencyVis:
     call ClearBuffer
@@ -1907,6 +1946,20 @@ ProcessFrequencyVis:
         dec c
         jr nz,_AddNoise
     ret
+.ends
+
+.section "Volume bars vis" free
+VolumeVisString:
+.db " Tone 1  Tone 2  Tone 3  Noise  ",0
+InitVolumeVis:
+  call NormalTilemap
+  call NoSprites
+  call ClearBuffer
+  call DrawVisBufferAsBars
+  ld hl,VolumeVisString
+  ld iy,VisTextLocation
+  call WriteASCII
+  ret
 
 ProcessVolumeVis:
     call ClearBuffer
@@ -1926,8 +1979,14 @@ ProcessVolumeVis:
     dec c
     jr nz,--
     ret
+.ends
 
+.section "Piano vis" free
+PianoVisString:
+.db "       Dave's Piano-matic       ",0
 InitPianoVis:
+    call NormalTilemap
+    
     ld hl,PianoVisString
     ld iy,VisTextLocation
     call WriteASCII
@@ -1959,7 +2018,7 @@ InitPianoVis:
     
     ret
 
-ProcessPianoVisMinValsPSG:
+PianoVisMinValsPSG:
 ; These correspond to the octave of values from 932 to 1760, which themselves are the thresholds between "standard" (12TET, A440) notes as PSG half-wavelengths
 ; (at 3579545Hz). These values are then the deltas to subtract in turn to determine if a note is "this one", working from high to low. It's complicated!
 ; Note  MIDI number  Frequency /Hz  Threshold from previous  PSG value of threshold
@@ -1977,7 +2036,7 @@ ProcessPianoVisMinValsPSG:
 ;   B           47          123.47                    120.0                     932 
 .dw -932, -56, -58, -62, -66, -70, -74, -79, -83, -88, -93
 
-ProcessPianoVisMinValsFM:
+PianoVisMinValsFM:
 ; Same again, for FM
 ; We assume the FNum/Block have been scaled to be >255/whatever
 ; We have these minimum values for notes:
@@ -1999,9 +2058,12 @@ ProcessPianoVisMinValsFM:
 ; So we make a similar table of "add each in turn and when you hit 0 the count is your note index". Then you have to sort the rest out in code.
 .dw -266, -16, -17, -17, -19, -20, -21, -23, -23, -25, -27, -28, -30
 
+.define MaxOctave 8 ; We have 9 octaves to show
+.define MaxNote 7 ; But the highest one only has 8 notes in it
+
 PianoXPositions:
 ;     C  C#   D  D#   E   F  F#   G  G#   A  A#   B
-.db   0,  2,  4,  6,  8, 12, 14, 16, 18, 20, 22, 24
+.db   8, 10, 12, 14, 16, 20, 22, 24, 26, 28, 30, 32
 PianoYPositions:
 .db 108,101,108,101,108,108,101,108,101,108,101,108
 
@@ -2064,14 +2126,14 @@ _ProcessPSGFreq:
         or a
         jp m,_NoHandPop
         ; The highest note is octave 8
-        cp 9
+        cp MaxOctave+1
         jp nc,_NoHandPop
         
         ; now we have de in the range 881..1760 and c = octave number
         ex de,hl
         ld b,11
         push iy
-          ld iy,ProcessPianoVisMinValsPSG
+          ld iy,PianoVisMinValsPSG
         -:ld e,(iy+0)     ; get (negative) value stored there
           ld d,(iy+1)
           add hl,de       ; Add value
@@ -2082,6 +2144,13 @@ _ProcessPSGFreq:
           jr -
 +:      pop iy
         ; Now we are octave c, note b
+        ld a,c
+        cp MaxOctave
+        jr nz,+
+        ld a,b
+        cp MaxNote+1
+        jr nc,_NoHandPop
++:      
         ; Look up the y just from the note
         ld d,0
         ld e,b
@@ -2109,7 +2178,8 @@ _NoHand:    ; Don't show the hand if applicable
       inc hl
       inc ix
     pop bc
-    djnz --
+    dec b
+    jp nz,-- ; too far for djnz (only just)
 
     SetDebugColour(3,0,3)
     ; Now do FM :)
@@ -2150,7 +2220,7 @@ _NoHand:    ; Don't show the hand if applicable
 +:    ; Now we want to find which note hl corresponds to.
       push iy
         ld c,0
-        ld iy,ProcessPianoVisMinValsFM
+        ld iy,PianoVisMinValsFM
 -:      ld e,(iy+0)
         ld d,(iy+1)
         add hl,de       ; Add value
@@ -2178,17 +2248,23 @@ _NoHand:    ; Don't show the hand if applicable
       add 12
       dec b
 +:    inc b
+
       ; put the note in de
       ld e,a
       ld d,0
 
-      ; Now we sanity-check the block is in range
+      ; Now we sanity-check the note is in range
       ld a,b
       or a
       jp m,_NoHandFM
       ; The highest note is octave 8
-      cp 9
-      jp nc,_NoHandFM
+      sub MaxOctave
+      jr c,+
+      jr nz,_NoHandFM
+      ; In the highest octave, check for the max note
+      cp MaxNote+1
+      jr nc,_NoHandFM      
++:
       ; Now we are good!
       ; Look up the y just from the note
       ld hl,PianoYPositions
@@ -2259,11 +2335,6 @@ DrawPianoVis:
     ld hl,SpriteTableBaseAddress
     call VRAMToHL
     
-;    ld a,(VisBuffer+20)
-;    xor 1
-;    ld (VisBuffer+20),a
-;    jr nz,_reverse
-
     ; Get count
     ld a,(VisBuffer+0)
     or a
@@ -2343,29 +2414,17 @@ _noHands:
     ld a,$d0
     out ($be),a
     ret
-    
+.ends
 
+.section "No vis" free
 InitNoVis:
-  call ClearBuffer
-  call DrawVisBufferAsBars
+  call NormalTilemap
+  call NoSprites
+  call BlankVisArea
   ret
-  
-InitVolumeVis:
-  call ClearBuffer
-  call DrawVisBufferAsBars
-  ld hl,VolumeVisString
-  ld iy,VisTextLocation
-  call WriteASCII
-  ret
+.ends
 
-InitFrequencyVis:
-  call ClearBuffer
-  call DrawVisBufferAsBars
-  ld hl,FrequencyVisString
-  ld iy,VisTextLocation
-  call WriteASCII
-  ret
-
+.section "Snow vis" free
 .define NumSnowFlakes 64
 
 SnowText:
@@ -2373,228 +2432,255 @@ SnowText:
 .db "               ..with flashing",0
 
 InitSnowVis:
-    push af
-    push bc
-    push hl
-        ; Set sprites to 8x8 mode    
-        ld a,(VDPRegister81Value)
-        and %11111101
-        ld (VDPRegister81Value),a
-        out ($bf),a
-        ld a,$81
-        out ($bf),a
+  call NormalTilemap
+    
+  ; Set sprites to 8x8 mode    
+  ld a,(VDPRegister81Value)
+  and %11111101
+  ld (VDPRegister81Value),a
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
 
-        ; Blank vis area
-        ld hl,VisLocation
-        call VRAMToHL
-        ld bc,32*2*5
-      -:xor a
-        out ($be),a
-        dec bc
-        ld a,b
-        or c
-        jr nz,-
+  call BlankVisArea
 
-        ; Fill vis area with my text
-        ld hl,SnowText
-        ld iy,VisLocation
-        call WriteASCII
+  ; Fill vis area with my text
+  ld hl,SnowText
+  ld iy,VisLocation
+  call WriteASCII
 
-        ; Define sprites
-        ld hl,SpriteTableBaseAddress+128
-        call VRAMToHL
-        ld c,NumSnowFlakes
-      -:xor a
-        out ($be),a
-        ld a,$b5                ; Tile number - blank
-        push ix
-        pop ix      ; delay
-        out ($be),a
-        dec c
-        jr nz,-
+  ; Define sprites
+  ld hl,SpriteTableBaseAddress+128
+  call VRAMToHL
+  ld c,NumSnowFlakes
+-:xor a
+  out ($be),a
+  ld a,$b5                ; Tile number - blank
+  push ix
+  pop ix      ; delay
+  out ($be),a
+  dec c
+  jr nz,-
 
-        ; Fill buffer with initial random positions
-        ; X is random, Y should be uniform!
-        ; 64 sprites spread over 192 lines is one every 3 lines
-        ld hl,VisBuffer
-        ld b,NumSnowFlakes
--:      call GetRandomNumber
-        ld (hl),a
-        inc hl
-        djnz -
-        ld b,NumSnowFlakes
-        xor a
--:      ld (hl),a
-        add a,3
-        inc hl
-        djnz -
-
-    pop hl
-    pop bc
-    pop af
-    ret
+  ; Fill buffer with initial random positions
+  ; X is random, Y should be uniform!
+  ; 64 sprites spread over 192 lines is one every 3 lines
+  ld hl,VisBuffer
+  ld b,NumSnowFlakes
+-:call GetRandomNumber
+  ld (hl),a
+  inc hl
+  djnz -
+  ld b,NumSnowFlakes
+  xor a
+-:ld (hl),a
+  add a,3
+  inc hl
+  djnz -
+  ret
 
 ProcessSnowVis:
-    push ix
-    push af
-    push bc
+  ; XXXX,YYYY stored in VisBuffer
+  ld ix,VisBuffer
+  ld c,NumSnowFlakes
+-:          ; X values:
+  ld a,c    ; get index
+  and $3    ; reduce to 0, 1, 2 or 3
 
-    ; XXXX,YYYY stored in VisBuffer
-    ld ix,VisBuffer
-    ld c,NumSnowFlakes
-    -:          ; X values:
-    ld a,c      ; get index
-    and $3      ; reduce to 0, 1, 2 or 3
-
-    ; Make it change if the corresponding PSG channel is loud enough
-    push hl
-    push bc
+  ; Make it change if the corresponding PSG channel is loud enough
+  push bc
     push af
-        ld hl,VGMPSGVolumes
-        ld b,0
-        ld c,a  ; 0,1,2,3 or a
-        add hl,bc
-        ld a,(hl)
-        cpl
-        and $0f
-        cp $a
-        jr c,+
+      ld hl,VGMPSGVolumes
+      ld b,0
+      ld c,a  ; 0,1,2,3 or a
+      add hl,bc
+      ld a,(hl)
+      cpl
+      and $0f
+      cp $a
+      jr c,+
     pop af  ; vol high
     add a,(ix+1) ; change value semi-randomly
     jr ++
 
-    +: ; vol low
++:  ; vol low
     pop af
     ; no change
-    ++:
-    pop bc
-    pop hl
+++:
+  pop bc
 
-    and $3      ; remove high bits
-    dec a       ; now it's -1, 0, +1 or +2
-    cp 2
-    jr nz,+
-    xor a      ; make +2 -> 0
-    +:
+  and %11      ; remove high bits
+  dec a       ; now it's -1, 0, +1 or +2
+  cp 2
+  jr nz,+
+  xor a      ; make +2 -> 0
++:
 
-    add a,(ix+0); Add it to the current value
-    ld (ix+0),a ; that's what I want
-    inc ix
-    dec c
-    jr nz,-
+  add a,(ix+0); Add it to the current value
+  ld (ix+0),a ; that's what I want
+  inc ix
+  dec c
+  jr nz,-
 
-    ld c,NumSnowFlakes
-    -:          ; Y values:
-    ld a,(ix+0) ; get current value
-    inc a       ; increment
-    ld (ix+0),a ; that's what I want
-    cp 192  ; If it's time to change..
-    jr nz,+
-    ld a,-8
-    ld (ix+0),a
-    ; I want a new random x-pos
-    call GetRandomNumber
-    ld (ix-NumSnowFlakes),a
-    +:
-    inc ix
-    dec c
-    jr nz,-
+  ld c,NumSnowFlakes
+-:            ; Y values:
+  ld a,(ix+0) ; get current value
+  inc a       ; increment
+  ld (ix+0),a ; that's what I want
+  cp 192  ; If it's time to change..
+  jr nz,+
+  ld a,-8
+  ld (ix+0),a
+  ; I want a new random x-pos
+  call GetRandomNumber
+  ld (ix-NumSnowFlakes),a
+  +:
+  inc ix
+  dec c
+  jr nz,-
 
-    pop bc
-    pop af
-    pop ix
-    ret
+  ret
         
 DrawSnowVis:
-    ; Noise flashing
-    ld a,(VGMPSGVolumes+3)
-    cpl
-    and $0f
-    jr z,+
-    ; noise on -> light cyan
-    ld c,colour(2,3,3)
-    jr ++
-  +:; noise off -> white
-    ld c,colour(3,3,3)
+  ; Noise flashing
+  ld a,(VGMPSGVolumes+3)
+  cpl
+  and $0f
+  jr z,+
+  ; noise on -> light cyan
+  ld c,colour(2,3,3)
+  jr ++
++:; noise off -> white
+  ld c,colour(3,3,3)
 
- ++:; Write colour to CRAM
-    ld a,22                ; palette index 22
-    out ($bf),a
-    ld a,%11000000         ; CRAM write
-    out ($bf),a
-    ld a,c                 ; data
-    out ($be),a
+++:; Write colour to CRAM
+  ld a,22       ; palette index 22
+  out ($bf),a
+  ld a,$c0      ; CRAM write
+  out ($bf),a
+  ld a,c        ; data
+  out ($be),a
 
-    ; Display sprites
-    ld hl,SpriteTableBaseAddress+128
-    call VRAMToHL
+  ; Display sprites
+  ld hl,SpriteTableBaseAddress+128
+  call VRAMToHL
 
-    ; Write X positions
-    ld c,NumSnowFlakes
-    ld ix,VisBuffer
-  -:ld a,(ix+0)
-    out ($be),a
-    ; Sprite number $b4+
-    ld a,c      ; snowflake number
-    add a,(ix+0); x-pos
-    rra
-    add a,(ix+NumSnowFlakes)
-    rra
-    rra
-    rra         ; look at a higher bit for slower changing
-    and %11
-    add a,$b4   ; start of snowflake sprites
-    out ($be),a ; skip sprite number
-    inc ix
-    dec c
-    jr nz,-
+  ; Write X positions
+  ld c,NumSnowFlakes
+  ld ix,VisBuffer
+-:ld a,(ix+0)
+  out ($be),a
+  ; Sprite number $b4+
+  ld a,c      ; snowflake number
+  add a,(ix+0); x-pos
+  rra
+  add a,(ix+NumSnowFlakes)
+  rra
+  rra
+  rra         ; look at a higher bit for slower changing
+  and %11
+  add a,$b4   ; start of snowflake sprites
+  out ($be),a ; skip sprite number
+  inc ix
+  dec c
+  jr nz,-
 
-    ld hl,SpriteTableBaseAddress
-    call VRAMToHL
-    ; Write Y positions
-    ld c,NumSnowFlakes
-    ld hl,VisBuffer+NumSnowFlakes
-  -:ld a,(hl)
-    out ($be),a ; output it
-    inc hl
-    dec c
-    nop
-    jr nz,-
-
-    ret
+  ld hl,SpriteTableBaseAddress
+  call VRAMToHL
+  ; Write Y positions
+  ld c,NumSnowFlakes
+  ld hl,VisBuffer+NumSnowFlakes
+-:ld a,(hl)   ; 7
+  out ($be),a ; 11 -> 35 ; output it
+  inc hl      ; 6
+  dec c       ; 4
+  jr nz,-     ; 7
+  ret
 
 GetRandomNumber:
-    ; Returns a random 8-bit number in a
-    push bc
-    push de
-    ld de,(RandomSR)  ; Load shift register value
-    ld b,0              ; reset output
-    ld c,8              ; no. of bits to shift by
-  -:ld a,e
-    srl d               ; Shift de into b
-    rr e
-    rr b
-    and %00001001       ; Tap bits 0 and 3 (before shifting) (same as PSG noise :)
-    jp pe,+             ; if odd parity, input 1 into shift register (ie. xor of tapped bits)
-    set 7,d
-  +:dec c
-    jr nz,-
+  ; Returns a random 8-bit number in a
+  push bc
+  push de
+  ld de,(RandomSR)  ; Load shift register value
+  ld b,0              ; reset output
+  ld c,8              ; no. of bits to shift by
+-:ld a,e
+  srl d               ; Shift de into b
+  rr e
+  rr b
+  and %00001001       ; Tap bits 0 and 3 (before shifting) (same as PSG noise :)
+  jp pe,+             ; if odd parity, input 1 into shift register (ie. xor of tapped bits)
+  set 7,d
++:dec c
+  jr nz,-
 
-    ld (RandomSR),de    ; Put shift register back in RAM
-    ld a,b              ; Return in a
-    pop de
-    pop bc
-    ret
+  ld (RandomSR),de    ; Put shift register back in RAM
+  ld a,b              ; Return in a
+  pop de
+  pop bc
+  ret
+.ends
 
+.section "Logo vis" free
+.enum VisBuffer export
+LogoX .dw
+LogoXLo db
+LogoXHi db
+LogoY .dw
+LogoYLo db
+LogoYHi db
+LogoXSpeed dw
+LogoYSpeed dw
+.ende
 
+InitLogoVis:
+  call NoSprites
+  ; Switch to secondary tilemap
+  ld hl,$8200 | %11110001 | ($3000 >> 10)
+  call SetVDPRegister
+  call ClearBuffer
+  
+  ; Random X, Y (in high byte)
+  call GetRandomNumber
+  ld (LogoXHi),a
+  call GetRandomNumber
+  ld (LogoYHi),a
+  
+  ld hl,100
+  ld (LogoXSpeed),hl
+  ld (LogoYSpeed),hl
+  
+  ret
+  
+ProcessLogoVis:
+  ld hl,(LogoX)
+  ld de,(LogoXSpeed)
+  add hl,de
+  ld (LogoX),hl
 
+  ld hl,(LogoY)
+  ld de,(LogoYSpeed)
+  add hl,de
+  ld (LogoY),hl
+  ret  
+
+DrawLogoVis:
+  ld a,(LogoXHi)
+  ld l,a
+  ld h,$88
+  call SetVDPRegister
+  ld a,(LogoYHi)
+  ld l,a
+  ld h,$89
+  call SetVDPRegister
+  ret
 .ends
 
 ;==============================================================
 ; VDP initialisation data
 ;==============================================================
 VDPRegisterInitData:
-.db %00000100,$80
+.db %00100100,$80
 ;    |||||||`- Disable synch
 ;    ||||||`-- Enable extra height modes
 ;    |||||`--- SMS mode instead of SG
@@ -2668,10 +2754,16 @@ PianoTiles:
 .incbin "art\piano.tiles.pscompr"
 
 PianoTileNumbers:
-.include "art\piano.tilemap.inc"
+.incbin "art\piano.tilemap.bin"
 
 Sprites:
 .incbin "art\sprites.tiles.withdupes.pscompr"
+
+LogoTiles:
+.incbin "art\screensaver.tiles.pscompr"
+
+LogoTileNumbers:
+.incbin "art\screensaver.tilemap.pscompr"
 
 
 .section "Save/load settings in BBRAM" FREE
@@ -3029,6 +3121,12 @@ VRAMToHL:
         out ($BF),a
     pop af
     ret
+SetVDPRegister:
+  ld a,l
+  out ($BF),a
+  ld a,h
+  out ($BF),a
+  ret
 .ends
 
 .section "Hex to BCD" FREE

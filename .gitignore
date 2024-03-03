@@ -13,3 +13,4 @@ auto.makefile
 *.lsbtilemap
 
 *.db
+*.bin
