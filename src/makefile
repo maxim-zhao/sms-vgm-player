@@ -21,13 +21,13 @@ auto.makefile: smsvgmplayer.stub.asm
 	$(BMP2TILE) $< -savetilemap $@
   
 art/3d-pad.lsbtilemap: art/3d-pad.png
-	$(BMP2TILE) $< -tileoffset 145 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 146 -savetilemap $@
 
 art/piano.tilemap.bin: art/piano.png
-	$(BMP2TILE) $< -tileoffset 255 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 256 -savetilemap $@
 
 art/screensaver.tilemap.pscompr: art/screensaver.png
-	$(BMP2TILE) $< -tileoffset 266 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 267 -savetilemap $@
 
 %.tilemap.pscompr: %.png
 	$(BMP2TILE) $< -savetilemap $@

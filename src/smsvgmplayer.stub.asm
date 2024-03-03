@@ -1830,12 +1830,12 @@ DrawVisBufferAsBars:
     sub d               ; Subtract d = minimum value for this tile
     jr nc,_AboveMinimum
     xor a              ; If the result is negative then I want 0
-    _AboveMinimum:
+_AboveMinimum:
     cp 9                ; Is it 9 or more?
     jr c,_LessThan8
     ld a,8              ; If not, I want 8
-    _LessThan8:
-    add a,96 ; tile offset
+_LessThan8:
+    add a,TileIndex_Scale ; tile offset
     out ($BE),a
     push hl ; delay
     pop hl
@@ -1864,9 +1864,9 @@ NormalTilemap:
   ld hl,$8200 | %11110001 | (TilemapBaseAddress >> 10)
   call SetVDPRegister
   ; No scrolling
-  ld hl,$8700
-  call SetVDPRegister
   ld hl,$8800
+  call SetVDPRegister
+  ld hl,$8900
   call SetVDPRegister
   ret
 .ends
@@ -2729,12 +2729,12 @@ Palettes:
 
 .enum 0 export ; Tile indices
 TileIndex_Font          dsb 96
-TileIndex_Scale         dsb 8   ; 0-8
+TileIndex_Scale         dsb 9   ; 0-8
 TileIndex_BigNumbers    dsb 41  ; 10*4 + 1 for colon dot
 TileIndex_3DPad         dsb 110
 TileIndex_Piano         dsb 11
 TileIndex_Logo          dsb 33
-TileIndexPadding        db ; Sprites need to be on a multiple of 2
+;TileIndexPadding        db ; Sprites need to be on a multiple of 2
 TileIndex_Sprite_BigHand  dsb 4
 TileIndex_Sprite_SmallHand  dsb 2
 TileIndex_Sprite_Snow  dsb 4
