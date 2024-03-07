@@ -4,8 +4,8 @@
 
   Time       Loop
 
-      °
-      °
+      ±
+      ±
 
     Total
     Loop

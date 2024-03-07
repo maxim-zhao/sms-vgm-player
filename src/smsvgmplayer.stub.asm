@@ -24,6 +24,19 @@
   .endif
 .endm
 
+.macro SetDebugColourB()
+  .ifdef Debug
+    push af
+      ld a,$10
+      out ($bf),a
+      ld a,$c0
+      out ($bf),a
+      ld a,b
+      out ($be),a
+    pop af
+  .endif
+.endm
+
 ; WLA-DX banking setup
 .memorymap
 defaultslot 0
@@ -155,7 +168,7 @@ VGMPlayerVBlank:
 
   ld a,(PaletteChanged)
   or a
-  call nz,NextPalette ; must do CRAM writes in VBlank
+  call nz,NextPalette ; Try to get CRAM dots in VBlank
 
   ld a,(VisChanged)
   or a
@@ -310,8 +323,9 @@ main:
   call DrawImageBytes
 
   ; Put something in the shift register
-  ld hl,$0210 ; the current time (am)
-              ; a better seed would be.. better. eg. a counter
+  ld a,r
+  ld l,a
+  ld h,$55
   ld (RandomSR),hl
 
   ; Load settings, initialise stuff
@@ -1873,9 +1887,15 @@ NormalTilemap:
 
 .section "Frequency bars vis" free
 FrequencyVisString:
-.db "100   Freq   200  /Hz  500 1k 7k",0
+; Mid values for | to left of each number:
+;    |110|127|149|179|226|304|466|999
+;     |115|132|155|189|241|333|537|1398
+;      |118|137|163|200|259|368|636|2330
+;       |123|143|171|212|280|411|777|6991
+.db " 100  Freq   200  /Hz  500 1k 7k",0
 
 InitFrequencyVis:
+  call UpdatePalette
   call NormalTilemap    
   call NoSprites
   call ClearBuffer
@@ -1892,37 +1912,35 @@ ProcessFrequencyVis:
     ld iy,VGMPSGVolumes
 
     ld b,3  ; how many channels to do
--:  ld e,(ix+0)
-    ld d,(ix+1)     ; de contains the frequency value 0000-03ff
-    ld a,(iy+0)
+-:  ld a,(iy+0)
     cpl
     and $0f
+    jr z,+
     ld c,a          ; c  contains the volume 0-f (inverted to be normal sense)
 
-    ; Divide frequency by 32 = >>5
-    ld a,e
-    and %11100000
-    ld e,a
-    rr d    ; Shift d and e together for 2 bits (10 bit number)
-    rr e
-    rr d
-    rr e
-    srl e   ; Then just shift e, inputting 0, for the remaining 3 shifts
-    srl e
-    srl e
+    ; TODO: periodic noise
+
+    ld a,(ix+0)
+    ld d,(ix+1)     ; da contains the frequency value 0000-03ff
+    ; 000000ddeeeeeeee
+    ;       ^^^^^ We want these bits; we shift them into d
+    .repeat 3
+    rla
+    rlc d
+    .endr
     ; I want 31-(this value)
     ld a,31
-    sub e
+    sub d
     ld e,a
 
     ; Add volume to value for channel
     ld hl,VisBuffer
-    ld d,$00
+    ld d,0
     add hl,de
     ld a,c
     add a,(hl)
     ld (hl),a
-
++:
     inc ix          ; Move to next values
     inc ix
     inc iy
@@ -1930,28 +1948,119 @@ ProcessFrequencyVis:
     djnz -
 
     ; Noise: bump every value by up to 3
-    ld c,32
-    ld hl,VisBuffer
     ld a,(VGMPSGVolumes+3)
     cpl
     and $f
-    ld b,a
-    srl b
-    srl b
-    _AddNoise:
-        ld a,(hl)
-        add a,b
-        ld (hl),a
-        inc hl
-        dec c
-        jr nz,_AddNoise
+    jr z,+
+    ld c,a
+    srl c
+    srl c
+    ld b,32
+    ld hl,VisBuffer
+_AddNoise:
+    ld a,(hl)
+    add a,c
+    ld (hl),a
+    inc hl
+    djnz _AddNoise
++:  
+    ; Now try FM
+    SetDebugColour(3,0,3)
+    ld ix,VGMYM2413Registers
+    ; 6 or 9 channels?
+    ld b,9
+    ld a,(ix+$e)
+    and %00100000
+    jr z,+
+    ld b,9
++:
+--: ;SetDebugColourB()
+    ; Check key bit
+    ld a,(ix+$20)
+    and %00010000
+    jr z,_skipChannel
+    ; Get volume
+    ld a,(ix+$30)
+    cpl
+    and $f
+    jr z,_skipChannel
+    ; Non-zero volume, but what's the frequency?
+    ; Our frequency buckets are for the PSG, so we have 32 buckets based on the high 5 bits of the half-wavelength value.
+    ; PSG freq = clock / 32 / x
+    ; FM freq = f-num * clock / 72 / 2^(19 - block)
+    ; So some algebra:
+    ; f-num * clock / 72 / 2^(19 - block) = clock / 32 / x
+    ; f-num / 72 / 2^(19 - block) = 1 / 32 / x
+    ; 32 / 72 / 2 * x = 2^(19 - block) / f-num
+    ; x = 2^(19 - block) / f-num * 4.5
+    ; We can't compute that... so we do a lookup.
+    ; Now get the frequency
+    ld l,(ix+$10) ; F-num low 8 bits
+    ld a,(ix+$20)
+    ld c,a
+    and 1
+    ld h,a ; high bit -> hl is F-num, 0..511
+    ; 0 frequency is not a note
+    ld a,h
+    or l
+    jr z,_skipChannel
+    ld a,c
+    srl a
+    and %111
+    jr z,+
+    push bc
+      ld b,a ; Block, 0..7
+-:    add hl,hl
+      djnz -
+    pop bc
++:
+    ; now hl = frequency number in 16 bits
+    ; Now we want to find which note hl corresponds to.
+    ; We add the (negative) values from _FMNoteThresholds sequentially. When it underflows, the slot is n-1.
+    ld a,31
+    ld iy, _FMNoteThresholds
+    ex de,hl ; test value in de now
+-:  ld l,(iy+0)
+    ld h,(iy+1)
+    add hl,de
+    jr c, +
+    dec a
+    inc iy
+    inc iy
+    jr -
++:  or a
+    jp m,_skipChannel ; too low
+    ; We want to put it in slot a. Check for >31
+    cp 32
+    jr nc,_skipChannel ; too high?
+    ; Look up the slot
+    ld hl,VisBuffer
+    ld d,$00
+    ld e,a
+    add hl,de
+    ; Get volume again
+    ld a,(ix+$30)
+    cpl
+    and $f
+    ; Add it on
+    add a,(hl)
+    ld (hl),a
+    
+_skipChannel:
+    inc ix
+    djnz --
     ret
+    
+_FMNoteThresholds:
+;.dw -1152, -37, -39, -43, -45, -49, -52, -57, -62, -66, -73, -80, -88, -97, -108, -120, -136, -153, -176, -202, -237, -279, -335, -410, -512, -658, -878, -1228, -1844, -3072, -6144, -32767
+.dw 65536-36864, -18432, -12288, -9216, -7372, -6144, -5266, -4608, -4096, -3686, -3351, -3072, -2835, -2633, -2457, -2304, -2168, -2048, -1940, -1843, -1755, -1675, -1602, -1536, -1474, -1417, -1365, -1316, -1271, -1228, -1189, -1152, -1
 .ends
 
 .section "Volume bars vis" free
 VolumeVisString:
 .db " Tone 1  Tone 2  Tone 3  Noise  ",0
 InitVolumeVis:
+  call UpdatePalette
   call NormalTilemap
   call NoSprites
   call ClearBuffer
@@ -1985,6 +2094,7 @@ ProcessVolumeVis:
 PianoVisString:
 .db "       Dave's Piano-matic       ",0
 InitPianoVis:
+    call UpdatePalette
     call NormalTilemap
     
     ld hl,PianoVisString
@@ -2194,6 +2304,11 @@ _NoHand:    ; Don't show the hand if applicable
       ; Check for key down
       ld a,(ix+$20)
       and %00010000
+      jr z,_NoHandFM
+      ; Check for volume >0
+      ld a,(ix+$30)
+      cpl
+      and $f
       jr z,_NoHandFM
       ; Now get the frequency
       ld l,(ix+$10) ; F-num low 8 bits
@@ -2418,6 +2533,7 @@ _noHands:
 
 .section "No vis" free
 InitNoVis:
+  call UpdatePalette
   call NormalTilemap
   call NoSprites
   call BlankVisArea
@@ -2432,6 +2548,7 @@ SnowText:
 .db "               ..with flashing",0
 
 InitSnowVis:
+  call UpdatePalette
   call NormalTilemap
     
   ; Set sprites to 8x8 mode    
@@ -2629,47 +2746,287 @@ LogoXHi db
 LogoY .dw
 LogoYLo db
 LogoYHi db
-LogoXSpeed dw
-LogoYSpeed dw
+LogoSpeed dw
+LogoXSign db
+LogoYSign db
+CurrentPalette db
+NewColours db
+PaletteOffset dw
 .ende
+
+; Increasing the X scroll moves the logo right.
+; Increasing the Y scroll moves it up.
+; Therefore we want to keep X in the range 8..198 and Y in the range -166..0.
+
+.define MinX 8
+.define MaxX 256-63
+.define MinY 0
+.define MaxY 192-32
+.define BaseLogoSpeed $80
+
+LogoPalettes:
+.db colour(1,0,1), colour(2,0,2), colour(3,0,3)
+.db colour(1,0,0), colour(2,0,0), colour(3,0,0)
+.db colour(1,1,0), colour(2,2,0), colour(3,3,0)
+.db colour(0,1,0), colour(0,2,0), colour(0,3,0)
+.db colour(0,1,1), colour(0,2,2), colour(0,3,3)
+.db colour(0,0,1), colour(0,0,2), colour(0,0,3)
+.define NumPalettes _sizeof_LogoPalettes / 3
 
 InitLogoVis:
   call NoSprites
   ; Switch to secondary tilemap
   ld hl,$8200 | %11110001 | ($3000 >> 10)
   call SetVDPRegister
+  ; Set border to black
+  ld hl,$c010
+  call SetVDPAddress
+  xor a
+  out ($be),a
+
   call ClearBuffer
   
   ; Random X, Y (in high byte)
-  call GetRandomNumber
+-:call GetRandomNumber
+  cp MaxX-MinX+1
+  jr nc,-
+  add MinX
   ld (LogoXHi),a
-  call GetRandomNumber
+  
+-:call GetRandomNumber
+  cp MaxY+1
+  jr nc,-
   ld (LogoYHi),a
   
-  ld hl,100
-  ld (LogoXSpeed),hl
-  ld (LogoYSpeed),hl
+  ld a,-1
+  ld (CurrentPalette),a
+  call RandomPalette
+  
+  ld hl,300
+  ld (LogoSpeed),hl
+  xor a
+  ld (LogoXSign),a
+  ld (LogoYSign),a
   
   ret
   
 ProcessLogoVis:
-  ld hl,(LogoX)
-  ld de,(LogoXSpeed)
+  ; Add all active volumes together
+  ld hl,VGMPSGVolumes
+  ld e,0
+  ld b,4
+-:ld a,(hl)
+  ; Invert scale
+  cpl
+  and $f
+  ; Add
+  add e
+  ld e,a
+  inc hl
+  djnz -
+
+  ; Now for FM...
+  ld ix,VGMYM2413Registers
+  ld a,(ix+$e)
+  and %00100000
+  jr z,_toneMode
+_rhythmMode:
+  ld a,(ix+$e)
+  and %00011111
+  ld b,a
+  ; Each 1 bit shall contribute the corresponding volume from ix+$36..$38
+  bit 4,b
+  jr nc,+
+  ld a,(ix+$36)
+  cpl
+  and $f
+  add e
+  ld e,a
++:bit 3,b
+  jr nc,+
+  ld a,(ix+$37)
+  cpl
+  and $f0
+  srl a
+  srl a
+  srl a
+  srl a
+  add e
+  ld e,a
++:bit 2,b
+  jr nc,+
+  ld a,(ix+$37)
+  cpl
+  and $f
+  add e
+  ld e,a
++:bit 1,b
+  jr nc,+
+  ld a,(ix+$38)
+  cpl
+  and $f0
+  srl a
+  srl a
+  srl a
+  srl a
+  add e
+  ld e,a
++:bit 0,b
+  jr nc,+
+  ld a,(ix+$38)
+  cpl
+  and $f
+  add e
+  ld e,a
++:; Now the instruments...
+  ld b,6
+  jr +
+  
+_toneMode:
+  ld b,9
++:; Check key bit
+-:ld a,(ix+$20)
+  and %00010000
+  jr z,+
+  ; Key is pressed, get vol
+  ld a,(ix+$30)
+  cpl
+  and $f
+  ; Add to total
+  add e
+  ld e,a
++:inc ix
+  djnz -
+
+
+.ifdef Debug
+  ; Debug: show computed speed
+  ld hl, TilemapAddress(0,0)-$800
+  call VRAMToHL
+  ld a,e
+  call WriteNumber
+.endif
+
+  ; Now we have (in theory) up to 15 per channel that is on, which is a max of
+  ; 15*4 (PSG) + 15*11 (FM rhythm) = 225 (for mixed mode)
+  ; 15*4 = 60 (for PSG only)
+  ; 15*11 = 165 (for FM only)
+  ; We should consider scaling it up for the common cases?
+  ld d,0
+  ld hl,BaseLogoSpeed
   add hl,de
+  add hl,de
+  add hl,de
+  add hl,de
+  ld (LogoSpeed),hl
+
+  ; Now do the bouncing at edges
+  ld a,(LogoXHi)
+  cp MaxX+1
+  jr c,+
+  ; Go left
+  xor a
+  ld (LogoXSign),a
+  inc a
+  ld (NewColours),a
+  jr ++
++:cp MinX
+  jr nc,++
+  ; Go right
+  ld a,1
+  ld (LogoXSign),a
+  ld (NewColours),a
+++:
+  ld hl,(LogoX)
+  ld de,(LogoSpeed)
+  ld a,(LogoXSign)
+  or a
+  jr z,+
+  add hl,de
+  jr ++
++:sbc hl,de
+++:
   ld (LogoX),hl
 
+  ; Y side
+  ; We have our variable going between 0 and an upper limit LogoYHi.
+  ; This means we want to go down when >LogoYHi but also go up when <0 - which is an overflow, so we instead check for halfway between LogoYHi and 256
+  ld a,(LogoYHi)
+  cp (256+MaxY)/2
+  jr c,+
+  ; <0, go up
+  ld a,1
+  ld (LogoYSign),a
+  ld (NewColours),a
+  jr ++
++:cp MaxY+1
+  jr c,++
+  ; Go down
+  xor a
+  ld (LogoYSign),a
+  inc a
+  ld (NewColours),a
+++:
   ld hl,(LogoY)
-  ld de,(LogoYSpeed)
+  ld de,(LogoSpeed)
+  ld a,(LogoYSign)
+  or a
+  jr z,+
   add hl,de
+  jr ++
++:sbc hl,de
+++:
   ld (LogoY),hl
+
+  ; Pick a palette if needed
+  ld a,(NewColours)
+  or a
+  call nz,RandomPalette
   ret  
+  
+RandomPalette:
+  ld hl,CurrentPalette
+-:call GetRandomNumber
+  and 7
+  cp NumPalettes
+  jr nc,-
+  cp (hl)
+  jr z,-
+  ld (hl),a
+  ; Look up offset
+  ld e,a
+  add a,a
+  add a,e
+  ld e,a
+  ld d,0
+  ld hl,LogoPalettes
+  add hl,de
+  ld (PaletteOffset),hl
+  ret
 
 DrawLogoVis:
-  ld a,(LogoXHi)
+  ld a,(NewColours)
+  or a
+  jp z,+ ; expected
+  xor a
+  ld (NewColours),a
+  ld hl,$c00a ; Logo colours
+  call VRAMToHL
+  ld b,3
+  ld hl,(PaletteOffset)
+-:ld a,(hl)   ; 7
+  out ($be),a ; 11
+  inc hl      ; 6
+  djnz -      ; 13 -> 37
+
++:ld a,(LogoXHi)
   ld l,a
   ld h,$88
   call SetVDPRegister
+  ; We invert the scroll compared to the Y value. This is to try to make the maths easier above.
   ld a,(LogoYHi)
+  neg
+  sub 256-224
   ld l,a
   ld h,$89
   call SetVDPRegister
@@ -3134,6 +3491,7 @@ VRAMToHL:
         out ($BF),a
     pop af
     ret
+SetVDPAddress:
 SetVDPRegister:
   ld a,l
   out ($BF),a

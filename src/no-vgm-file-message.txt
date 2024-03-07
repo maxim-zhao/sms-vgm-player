@@ -1,6 +1,6 @@
-        ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ
-        ¡Æ No VGM file! ¡Æ
-        ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ¡Æ
+        ±±±±±±±±±±±±±±±±
+        ± No VGM file! ±
+        ±±±±±±±±±±±±±±±±
 
  No VGM file has been found by
  the player. You have to add a
@@ -13,11 +13,11 @@
 
       (all on one line)
  where:
- ¡Æ vgmplayer.stub is the 16KB
+ ± vgmplayer.stub is the 16KB
    player file
- ¡Æ vgmfile.vgm is an
+ ± vgmfile.vgm is an
    UNCOMPRESSED VGM file
- ¡Æ output.sms is the combined
+ ± output.sms is the combined
    file which will be created
 
   http://www.smspower.org/Music
