@@ -2752,6 +2752,10 @@ LogoYSign db
 CurrentPalette db
 NewColours db
 PaletteOffset dw
+HighestVolumeSeen db
+LogoBrightness db ; 0-5
+LogoBrightnessSmoothed db ; 0-5
+SmoothingCounter db
 .ende
 
 ; Increasing the X scroll moves the logo right.
@@ -2802,11 +2806,18 @@ InitLogoVis:
   ld (CurrentPalette),a
   call RandomPalette
   
-  ld hl,300
+  ld hl,BaseLogoSpeed
   ld (LogoSpeed),hl
   xor a
   ld (LogoXSign),a
   ld (LogoYSign),a
+  
+  ld a,6 ; Bugs out of this is any lower
+  ld (HighestVolumeSeen),a
+  
+  xor a
+  ld (LogoBrightness),a
+  ld (LogoBrightnessSmoothed),a
   
   ret
   
@@ -2898,27 +2909,86 @@ _toneMode:
 +:inc ix
   djnz -
 
-
-.ifdef Debug
-  ; Debug: show computed speed
-  ld hl, TilemapAddress(0,0)-$800
-  call VRAMToHL
-  ld a,e
-  call WriteNumber
-.endif
-
   ; Now we have (in theory) up to 15 per channel that is on, which is a max of
   ; 15*4 (PSG) + 15*11 (FM rhythm) = 225 (for mixed mode)
   ; 15*4 = 60 (for PSG only)
   ; 15*11 = 165 (for FM only)
-  ; We should consider scaling it up for the common cases?
+
+.ifdef Debug
+  ; Debug: show value
+  ld hl, TilemapAddress(8,0)-$800
+  call VRAMToHL
+  ld a,e
+  call WriteNumber
+.endif
+  
+  ; Update max 
+  ld a,(HighestVolumeSeen)
+  cp e
+  jr nc,+
+  ld a,e
+  ld (HighestVolumeSeen),a
++:; Now we have e compared to HighestVolumeSeen. We want to calculate the logo brightness on a scale of 0..5,
+  ; so we want to compute (e * 5 + HighestVolumeSeen-1) / HighestVolumeSeen
+  ; First compute e*5
   ld d,0
-  ld hl,BaseLogoSpeed
+  ld h,d
+  ld l,e
+  add hl,hl
+  add hl,hl
+  add hl,de ; now hl = e*5
+  ; Add HighestVolumeSeen-1
+  ld a,(HighestVolumeSeen)
+  ld e,a
+  ld d,0
   add hl,de
-  add hl,de
-  add hl,de
-  add hl,de
-  ld (LogoSpeed),hl
+  dec hl
+  ; Then divide it by HighestVolumeSeen
+  ld b,h
+  ld c,l
+  ld hl,0
+  call Divide16
+  ; Result should be in c
+  ld a,c
+  ld (LogoBrightness),a
+  ; Now update LogoBrightnessSmoothed
+  ; If LogoBrightness >= LogoBrightnessSmoothed, set it to that value 
+  ; and set SmoothingCounter to the start value.
+  ; Otherwise, decrement SmoothingCounter and if it reaches 0, decrement LogoBrightnessSmoothed.
+  ld hl,LogoBrightnessSmoothed
+  cp (hl) ; carry -> smoothed value is >a so we should (maybe) decrement it
+  jr nc,_noDecay
+_decay:
+  ld a,(SmoothingCounter)
+  dec a
+  ld (SmoothingCounter),a
+  jr nz,_done
+  dec (hl)
+  jr _resetCounter
+_noDecay:
+  ; Else smoothed value is <= a, so we set it to a
+  ld (hl),a
+  ; And reset the counter
+_resetCounter:
+  ld a,10
+  ld (SmoothingCounter),a
+_done:
+  
+.ifdef Debug
+  ; Debug: show value
+  ld hl, TilemapAddress(8,1)-$800
+  call VRAMToHL
+  ld a,(LogoBrightness)
+  call WriteNumber
+  ld hl, TilemapAddress(10,0)-$800
+  call VRAMToHL
+  ld a,(HighestVolumeSeen)
+  call WriteNumber
+  ld hl, TilemapAddress(8,2)-$800
+  call VRAMToHL
+  ld a,(LogoBrightnessSmoothed)
+  call WriteNumber
+.endif
 
   ; Now do the bouncing at edges
   ld a,(LogoXHi)
@@ -3002,24 +3072,38 @@ RandomPalette:
   ld hl,LogoPalettes
   add hl,de
   ld (PaletteOffset),hl
+  xor a
+  ld (NewColours),a
   ret
 
 DrawLogoVis:
-  ld a,(NewColours)
-  or a
-  jp z,+ ; expected
-  xor a
-  ld (NewColours),a
   ld hl,$c00a ; Logo colours
   call VRAMToHL
-  ld b,3
+  ; We emit 5-LogoBrightnessSmoothed blacks...
+  ld hl,LogoBrightnessSmoothed
+  ld a,5
+  sub (hl)
+  jr z,+
+  ld b,a
+  xor a
+-:out ($be),a
+  djnz -
++:; Then LogoBrightnessSmoothed+1 of our palette, doubled up
+  ld b,(hl)
+  inc b
   ld hl,(PaletteOffset)
--:ld a,(hl)   ; 7
-  out ($be),a ; 11
-  inc hl      ; 6
-  djnz -      ; 13 -> 37
+-:ld a,(hl)
+  out ($be),a
+  dec b
+  jr z,+
+  out ($be),a
+  inc hl
+  djnz -
+  
++:; Done
 
-+:ld a,(LogoXHi)
+  ; Update scroll registers
+  ld a,(LogoXHi)
   ld l,a
   ld h,$88
   call SetVDPRegister
