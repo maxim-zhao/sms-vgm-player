@@ -83,7 +83,7 @@ VisRoutine                      dw ; Routine to calculate vis
 VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
 VisChanged                      db ; Flag to signal that the vis needs to be initialised
 SecondsChanged                  db
-VisBuffer                       dsb 256 ; Visualisers can do as they wish with this
+VisBuffer                       dsb 512 ; Visualisers can do as they wish with this
 LoopsChanged                    db
 PaletteChanged                  db
 PaletteNumber                   db
@@ -158,13 +158,13 @@ NoVBlank:
 
 .section "VGM Player vblank" free
 VGMPlayerVBlank:
-  SetDebugColour(0,1,0)
+  SetDebugColour(0,1,0) ; Dark green
   call VGMUpdate      ; Read/handle sound data
-  SetDebugColour(1,0,0)
+  SetDebugColour(1,0,0) ; Dark red
   call CheckInput ; Read input into memory
   call ShowTime   ; Update time display
   call ShowLoopNumber
-  SetDebugColour(2,0,0)
+  SetDebugColour(2,0,0) ; Medium red
 
   ld a,(PaletteChanged)
   or a
@@ -175,9 +175,9 @@ VGMPlayerVBlank:
   call nz,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
 
   ld hl,(VisDisplayRoutine)   ; Draw vis
-  SetDebugColour(3,0,0)
+  SetDebugColour(3,0,0) ; Bright red
   call callHL
-  SetDebugColour(0,0,0)
+  SetDebugColour(0,0,0) ; All done
 
   ret
 .ends
@@ -314,13 +314,21 @@ main:
   ld iy,TilemapAddress(0, 0)
   ld hl,TextData
   call WriteASCII
+  
+  ; Fix up colons
+  ld hl,TilemapAddress(6,6)
+  call VRAMToHL
+  ld a,TileIndex_BigNumbers+17
+  out ($be),a
+  ld hl,TilemapAddress(6,7)
+  call VRAMToHL
+  out ($be),a
 
   ; Draw pad image
   ld bc,$0c0b     ; 12x11
   ld ix,PadData
   ld iy,TilemapAddress(19, 1)
-  ld h,0
-  call DrawImageBytes
+  call DrawImageArea
 
   ; Put something in the shift register
   ld a,r
@@ -370,10 +378,10 @@ main:
   ei
 InfiniteLoop:   ; to stop the program
   halt
-  SetDebugColour(0,2,0)
+  SetDebugColour(0,2,0) ; Medium green
   call ProcessInput   ; Process input from the last VBlank
-  SetDebugColour(0,3,0)
-  ld hl,(VisRoutine)  ; Update vis data
+  SetDebugColour(0,3,0) ; Bright green
+  ld hl,(VisRoutine)  ; Vis processing
   call callHL
   SetDebugColour(0,0,0)
 
@@ -564,7 +572,6 @@ _SkipGD3String:
     call MoveHLForward
     ld b,(hl)
     call MoveHLForward
-
     ld a,b
     or c
     jr nz,-
@@ -582,42 +589,31 @@ _DrawGD3String:
   push bc
     ld de,GD3DisplayerBuffer    ; Where to store ASCII
     ld a,MaxLength
-_Loop:
-    ; Get value into bc
+-:  ; Get value into bc. GD3 uses UTF-16.
     ld c,(hl)
     call MoveHLForward
     ld b,(hl)
     call MoveHLForward
-    push hl
-      ld h,a ; backup char counter
-      ; See if value is acceptable
+    push af ; backup char counter
       ld a,b
-      or a ; high values are bad
-      jr nz,_Unacceptable
-      ld a,c
-      or a
-      jr z,_LoopEnd ; zero means end of string
-      bit 7,a ; we only do 7-bit ASCII
-      jr z,_Acceptable
-_Unacceptable:
-      ld a,'?';$bf    ; = '?'
-_Acceptable:
+      or c
+      jr z,_done
+      ; Map character from UTF-16 to our font
+      call _MapToFont
       ld (de),a
-      ld a,h ; restore counter
-    pop hl
+    pop af
     inc de
-     ; Fall through to next char
-_NextChar:
     dec a   ; decrement counter
-    jr nz,_Loop
+    jr nz,-
     ; If it gets to zero:
     call _SkipGD3String   ; go to the end of the string
-    push hl
+    jr +
     ; fall through to finish
 
-_LoopEnd:
-      ld h,d
-      ld l,e
+_done:
+    pop af
++:  push hl ; hl is returned
+      ex de,hl
       cp 32           ; If no chars were written
       jr nz,+
       ld (hl),' ' ; put a space so it'll work properly
@@ -632,6 +628,72 @@ _LoopEnd:
   pop de
   pop af
   ret
+
+_MapToFont:
+  ; bc = UTF-16 word
+  ; Return a = character
+  ; Our font has ASCII for 32..126 and then some extra chars
+  ld a,b
+  or a
+  jr nz,_lookup
+  ; <255
+  ld a,c
+  cp ' '
+  jr c,_invalid
+  cp 127
+  jr nc,_lookup
+  ; It is between ' ' and '~', we have those
+  ret
+  
+_invalid:
+  ld a,'?'
+  ret
+
+_lookup:
+  push hl
+  push de
+    ld hl,_lookupData
+    ld d,_sizeof__lookupData / 3
+-:  ld a,(hl)
+    inc hl
+    cp c
+    jr nz,+
+    ld a,(hl)
+    inc hl
+    cp b
+    jr nz,++
+    ; It's a match
+    ld a,(hl)
+    jr +++    
+    
++:  inc hl
+++: inc hl
+    dec d
+    jr nz,-
+    ld a,'?' ; no match found
++++:
+  pop de
+  pop hl
+  ret
+
+; UTF-16 and index to use
+_lookupData:
+.table dw, db
+.row $007f, ' ' ; non-breaking space
+.row $00a3, 128 ; '£'
+.row $00a9, 127 ; '©' 
+.row $00b3, 129 ; '³'
+.row $00e0, 'a' ; 'à'
+.row $00e1, 'a' ; 'á'
+.row $00e2, 'a' ; 'â'
+.row $00e3, 'a' ; 'ã'
+.row $00e4, 'a' ; 'ä'
+.row $00e5, 'a' ; 'å'
+.row $00e8, 'e' ; 'è'
+.row $00e9, 130 ; 'é'
+.row $00ea, 'e' ; 'ê'
+.row $00eb, 'e' ; 'ë'
+.endt
 .ends
 
 ;==============================================================
@@ -702,56 +764,56 @@ DrawByte:
 
 ;==============================================================
 ; Write lower BCD digit in a using large numbers,
-; at screen position hl
+; at screen position hl. Preserve bc, de, hl; trash a
 ;==============================================================
 DrawLargeDigit:
   call VRAMToHL
   push bc
+  push de
   push hl
-    sla a ; multiply by 2
-    ld c,a
-    add a,TileIndex_BigNumbers
-    out ($be),a               ; 11 -> start
-    nop                       ; 4
-    nop                       ; 4
-    nop                       ; 4
-    xor a                     ; 4
-    out ($be),a               ; 11 -> 27 cycles
-    nop                       ; 4
-    ld a,c                    ; 4
-    add a,TileIndex_BigNumbers+1  ; 7
-    out ($be),a               ; 11 -> 26 cycles
-    nop                       ; 4
-    nop                       ; 4
-    nop                       ; 4
-    xor a                     ; 4
-    out ($be),a               ; 11 -> 27 cycles
-    ld a,c
-
-    push bc
-      ld bc,64
+    add a,a
+    add a,a ; multiply by 4
+    push hl
+      ld hl,BigNumbersTilemap
+      add l
+      ld l,a
+      adc h
+      sub l
+      ld h,a
+      call _drawTwoTiles ; leaves hl pointing at the last byte used
+      
+      ; One row below is 39 bytes after that
+      ld bc,39
       add hl,bc
-      call VRAMToHL
-    pop bc
-
-    add a,TileIndex_BigNumbers+20
-    out ($be),a
-    nop                       ; 4
-    nop                       ; 4
-    nop                       ; 4
-    xor a
-    out ($be),a
-    nop                       ; 4
-    ld a,c
-    add a,TileIndex_BigNumbers+21
-    out ($be),a
-    nop                       ; 4
-    nop                       ; 4
-    nop                       ; 4
-    xor a
-    out ($be),a
+      ; Save that
+      ex de,hl
+    pop hl
+    
+    ld bc,64
+    add hl,bc
+    call VRAMToHL
+    
+    ex de,hl
+    call _drawTwoTiles
   pop hl
+  pop de
   pop bc
+  ret
+_drawTwoTiles:
+  ld a,(hl)
+  out ($be),a               ; 11 -> start
+  inc hl                    ; 6
+  ld a,(hl)                 ; 7
+  nop                       ; 4
+  out ($be),a               ; 11 -> 28 cycles
+  inc hl                    ; 6
+  ld a,(hl)                 ; 7
+  nop                       ; 4
+  out ($be),a               ; 11 -> 28 cycles
+  inc hl                    ; 6
+  ld a,(hl)                 ; 7
+  nop                       ; 4
+  out ($be),a               ; 11 -> 28 cycles
   ret
 
 CheckInput: ; VBlank routine, just read it into memory
@@ -2123,8 +2185,7 @@ InitPianoVis:
     xor a
     ld b,32*2*2
 -:  out ($be),a
-    dec b
-    jr nz,-
+    djnz -
     
     ret
 
@@ -2542,7 +2603,18 @@ InitNoVis:
 
 .section "Snow vis" free
 .define NumSnowFlakes 64
-
+.enum VisBuffer export
+  ; I want to have various data for each snowflake, but I also want to make the sprite table upload easy.
+  ; So I have a table of XNs and a table of Ys...
+  ; And then the extra data, aligned relative to the preceding for constant offsets
+  SnowflakeYs dsb 64
+  SnowflakeXSpeeds dsb 64 ; <- iy points here
+  SnowflakeXLos dsb 64
+  SnowflakeXNs dsw 64
+  SnowflakeAngleSpeeds dsw 64 ; <- ix points here
+.ende
+; So now I can traverse the byte-sized tables with XSpeed at Y+64,
+; and XN at AngleSpeed-128
 SnowText:
 .db 10,"  Dancing snow..",10,10
 .db "               ..with flashing",0
@@ -2566,44 +2638,59 @@ InitSnowVis:
   ld iy,VisLocation
   call WriteASCII
 
-  ; Define sprites
-  ld hl,SpriteTableBaseAddress+128
-  call VRAMToHL
-  ld c,NumSnowFlakes
--:xor a
-  out ($be),a
-  ld a,$b5                ; Tile number - blank
-  push ix
-  pop ix      ; delay
-  out ($be),a
-  dec c
-  jr nz,-
-
-  ; Fill buffer with initial random positions
-  ; X is random, Y should be uniform!
-  ; 64 sprites spread over 192 lines is one every 3 lines
-  ld hl,VisBuffer
+  ; Fill buffer with initial spaced Ys
+  xor a
+  ld hl,SnowflakeYs
+  ld b,NumSnowFlakes
+-:ld (hl),a
+  inc hl
+  add a,3
+  djnz -
+  
+  ; Then X speeds
   ld b,NumSnowFlakes
 -:call GetRandomNumber
   ld (hl),a
   inc hl
   djnz -
+  
+  ; Then X low bytes, which we don't care about
+  ld hl,SnowflakeXNs
+  
+  ; Then XNs
   ld b,NumSnowFlakes
-  xor a
--:ld (hl),a
-  add a,3
+-:call GetRandomNumber
+  ld (hl),a
+  inc hl
+  ; Skip n for now
+  inc hl
+  djnz -
+  
+  ; Then AngleSpeeds are all random
+  ld b,NumSnowFlakes
+-:call GetRandomNumber
+  ld (hl),a
+  inc hl
+  call GetRandomNumber
+  and %00011111 ; Slow it down
+  sub %00001111
+  ld (hl),a
   inc hl
   djnz -
   ret
 
 ProcessSnowVis:
-  ; XXXX,YYYY stored in VisBuffer
-  ld ix,VisBuffer
-  ld c,NumSnowFlakes
--:          ; X values:
-  ld a,c    ; get index
-  and $3    ; reduce to 0, 1, 2 or 3
+  ld iy,SnowflakeXSpeeds
+  ld ix,SnowflakeAngleSpeeds
+  ld b,NumSnowFlakes
+-:; For each snowflake...
+  ; Get the current X
+  ld l,(iy+64)
+  ld h,(ix-128)
+  ; Get the speed
+  ld e,(iy+0)
 
+/* TODO restore this, make it FM sensitive?
   ; Make it change if the corresponding PSG channel is loud enough
   push bc
     push af
@@ -2625,36 +2712,55 @@ ProcessSnowVis:
     ; no change
 ++:
   pop bc
-
-  and %11      ; remove high bits
-  dec a       ; now it's -1, 0, +1 or +2
-  cp 2
-  jr nz,+
-  xor a      ; make +2 -> 0
-+:
-
-  add a,(ix+0); Add it to the current value
-  ld (ix+0),a ; that's what I want
-  inc ix
-  dec c
-  jr nz,-
-
-  ld c,NumSnowFlakes
--:            ; Y values:
-  ld a,(ix+0) ; get current value
-  inc a       ; increment
-  ld (ix+0),a ; that's what I want
-  cp 192  ; If it's time to change..
-  jr nz,+
-  ld a,-8
+*/  
+  
+  ; Extend as signed
+  ld d,0
+  bit 7,e
+  jr z,+
+  dec d
++:; now de = speed to add
+  add hl,de
+  ; Save back
+  ld (iy+64),l
+  ld (ix-128),h
+  
+  ; And apply the spin
+  ld a,(ix+0) ; Angle
+  ld c,(ix+1) ; Speed
+  add a,c
   ld (ix+0),a
-  ; I want a new random x-pos
+  
+  ; And make that the N
+  ; Get high 2 bits
+  rlca
+  rlca
+  and %11
+  add a,TileIndex_Sprite_Snow   ; start of snowflake sprites
+  ld (ix-127),a
+  
+  ; Just increment Y
+  ld a,(iy-64)
+  inc a
+  cp 192
+  jr nz,+
+  ; We want to randomise the X, speed and spin again
   call GetRandomNumber
-  ld (ix-NumSnowFlakes),a
-  +:
+  ld (ix-128),a ; X
+  call GetRandomNumber
+  ld (iy+0),a ; speed
+  call GetRandomNumber
+  and %00011111 ; Slow it down
+  sub %00001111
+  ld (ix+1),a ; Rotation speed
+  ld a,-8
++:ld (iy-64),a ; Y
+  
+  ; Move on
+  inc iy
   inc ix
-  dec c
-  jr nz,-
+  inc ix
+  djnz -
 
   ret
         
@@ -2678,40 +2784,21 @@ DrawSnowVis:
   ld a,c        ; data
   out ($be),a
 
-  ; Display sprites
-  ld hl,SpriteTableBaseAddress+128
-  call VRAMToHL
-
-  ; Write X positions
-  ld c,NumSnowFlakes
-  ld ix,VisBuffer
--:ld a,(ix+0)
-  out ($be),a
-  ; Sprite number $b4+
-  ld a,c      ; snowflake number
-  add a,(ix+0); x-pos
-  rra
-  add a,(ix+NumSnowFlakes)
-  rra
-  rra
-  rra         ; look at a higher bit for slower changing
-  and %11
-  add a,TileIndex_Sprite_Snow   ; start of snowflake sprites
-  out ($be),a ; skip sprite number
-  inc ix
-  dec c
-  jr nz,-
-
+  ; Emit to sprite table
   ld hl,SpriteTableBaseAddress
   call VRAMToHL
-  ; Write Y positions
-  ld c,NumSnowFlakes
-  ld hl,VisBuffer+NumSnowFlakes
--:ld a,(hl)   ; 7
-  out ($be),a ; 11 -> 35 ; output it
-  inc hl      ; 6
-  dec c       ; 4
-  jr nz,-     ; 7
+  ld hl,SnowflakeYs
+  ld b,NumSnowFlakes*2 ; because outi + djnz will double-decrement b
+  ld c,$be
+-:outi ; 16
+  djnz - ; 13 -> 29 cycles. otir is too fast!
+
+  ld hl,SpriteTableBaseAddress+128
+  call VRAMToHL
+  ld b,0 ; for 128 bytes*2
+  ld hl,SnowflakeXNs
+-:outi
+  djnz -
   ret
 
 GetRandomNumber:
@@ -3169,9 +3256,9 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Font          dsb 96
+TileIndex_Font          dsb 96+32+48+2
 TileIndex_Scale         dsb 9   ; 0-8
-TileIndex_BigNumbers    dsb 41  ; 10*4 + 1 for colon dot
+TileIndex_BigNumbers    dsb 33
 TileIndex_3DPad         dsb 110
 TileIndex_Piano         dsb 11
 TileIndex_Logo          dsb 33
@@ -3181,17 +3268,27 @@ TileIndex_Sprite_SmallHand  dsb 2
 TileIndex_Sprite_Snow  dsb 4
 .ende
 
+.macro TileMapFilter
+.redefine _out \1+TileMapFilterOffset
+.endm
+.macro TileMapFilteredIncBin(filename, offset)
+.redefine TileMapFilterOffset offset
+.incbin filename filter TileMapFilter filtersize 2
+.endm
+
 TileData:
 .incbin "fonts\ZXChicagoPod.tiles.withdupes.pscompr"
 
 BigNumbers:
 .incbin "art\big-numbers.tiles.pscompr"
+BigNumbersTilemap:
+  TileMapFilteredIncBin("art\big-numbers.tilemap.bin", TileIndex_BigNumbers)
 
 Pad:
 .incbin "art\3d-pad.tiles.pscompr"
 
 PadData:
-.incbin "art\3d-pad.lsbtilemap"
+  TileMapFilteredIncBin("art\3d-pad.tilemap.bin", TileIndex_3DPad)
 
 ScaleData:
 .incbin "art\scale.tiles.pscompr"
@@ -3208,7 +3305,7 @@ PianoTiles:
 .incbin "art\piano.tiles.pscompr"
 
 PianoTileNumbers:
-.incbin "art\piano.tilemap.bin"
+  TileMapFilteredIncBin("art\piano.tilemap.bin", TileIndex_Piano)
 
 Sprites:
 .incbin "art\sprites.tiles.8x16.pscompr"
@@ -3526,39 +3623,25 @@ WriteASCII:
 ; c  = height (tiles)
 ; ix = location of tile number data (bytes)
 ; iy = name table address of top-left tile
-; Sets all tile flags to zero.
 ;==============================================================
 .section "Draw image" FREE
-DrawImageBytes:
-    push af
-    push bc     ; Width, height
-    push de     ; Width, height counters
-    push hl     ; h = high byte
-    push ix     ; ROM location
-    push iy     ; VRAM location
-        _DrawRow:
-            call VRAMToIY     ; Move to the right place
-            ld d,b                  ; no. of tiles to loop through per row
-            _DrawTile:
-                ld a,(ix+0)
-                out ($be),a
-                ld a,h
-                out ($be),a
-                inc ix
-                dec d
-                jp nz,_DrawTile
-
-            ld de,64                ; Move name table address
-            add iy,de
-
-            dec c
-            jp nz,_DrawRow
-    pop iy
-    pop ix
-    pop hl
-    pop de
+DrawImageArea:
+--: call VRAMToIY     ; Move to the right place
+    push bc
+-:    ld a,(ix+0)
+      inc ix
+      out ($be),a
+      ld a,(ix+0)
+      inc ix
+      out ($be),a
+      djnz -
     pop bc
-    pop af
+    
+    ld de,64 ; Move name table address
+    add iy,de
+
+    dec c
+    jp nz,--
     ret
 .ends
 
