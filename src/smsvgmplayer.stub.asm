@@ -6,7 +6,22 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define Debug
+;.define Debug
+
+.define VGMSTARTPAGE 2 ; 1 for 16KB, 2 for 32KB
+
+; This is sensitive to our font image
+.asciitable
+map 0 = $ff
+map "\n" = $fe
+map " " to "\"" = 0
+map "&" to ")" = $3
+map "+" to ";" = $7
+map "?" = $18
+map "A" to "Z" = $19
+map "a" to "z" = $33
+map "~" = $4d
+.enda
 
 .function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32) 
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
@@ -40,13 +55,17 @@
 ; WLA-DX banking setup
 .memorymap
 defaultslot 0
-slotsize $4000
+slotsize $7ff0
 slot 0 $0000
+slotsize $0010
+slot 1 $7ff0
 .endme
 
 .rombankmap
-bankstotal 1
-banksize $4000
+bankstotal 2
+banksize $7ff0
+banks 1
+banksize $0010
 banks 1
 .endro
 
@@ -56,7 +75,7 @@ banks 1
 ;==============================================================
 ; SDSC tag and SMS rom header
 ;==============================================================
-.sdsctag 0.94,"SMS VGM player",SDSCNotes,"Maxim"
+.sdsctag 2.0,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
 ;    123456789012345678901234567890123456789012345678901234567890123
@@ -91,6 +110,7 @@ RandomSR                        dw ; Random number generator shift register, nee
 GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
+InitVisDI                       db
 .ende
 
 .include "PhantasyStardecompressors.asm"
@@ -215,6 +235,7 @@ main:
   ld (PAGING_SLOT_0),a
   inc a
   ld (PAGING_SLOT_1),a
+  inc a
   ld (PAGING_SLOT_2),a
 
   call TurnOffScreen
@@ -277,32 +298,12 @@ main:
   ld hl,TileData
   call LoadTiles4BitRLENoDI
 
-  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
-  ld hl,ScaleData
-  call LoadTiles4BitRLENoDI
-
   ld de,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
   ld hl,BigNumbers
   call LoadTiles4BitRLENoDI
 
   ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
   ld hl,Pad
-  call LoadTiles4BitRLENoDI
-
-  ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
-  ld hl,PianoTiles
-  call LoadTiles4BitRLENoDI
-
-  ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
-  ld hl,LogoTiles
-  call LoadTiles4BitRLENoDI
-  
-  ld hl,LogoTileNumbers
-  ld de,$7000
-  call LoadTilemapToVRAM
-
-  ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
-  ld hl,Sprites
   call LoadTiles4BitRLENoDI
 
   ; Initial button state values (all off)
@@ -318,10 +319,15 @@ main:
   ; Fix up colons
   ld hl,TilemapAddress(6,6)
   call VRAMToHL
-  ld a,TileIndex_BigNumbers+17
+  ld a,<(TileIndex_BigNumbers+17)
+  out ($be),a
+  ld a,>(TileIndex_BigNumbers+17)
   out ($be),a
   ld hl,TilemapAddress(6,7)
   call VRAMToHL
+  ld a,<(TileIndex_BigNumbers+17)
+  out ($be),a
+  ld a,>(TileIndex_BigNumbers+17)
   out ($be),a
 
   ; Draw pad image
@@ -339,7 +345,11 @@ main:
   ; Load settings, initialise stuff
   call LoadSettings
   call UpdatePalette
+  xor a
+  ld (InitVisDI),a
   call InitialiseVis
+  ld a,1
+  ld (InitVisDI),a
 
   ; Reset VGM player
   call VGMInitialise
@@ -407,7 +417,7 @@ VGMOffsetToPageAndOffset:
     ; Page in the first page, remembering the current page on the stack
     ld a,(PAGING_SLOT_2)
     push af
-      ld a,1
+      ld a,VGMSTARTPAGE
       ld (PAGING_SLOT_2),a
 
       ; offset of dword in .sms -> ix
@@ -447,7 +457,9 @@ _NonZero:
       rla
       sla b
       rla
+      .repeat VGMSTARTPAGE
       inc a ; VGM stub is one page
+      .endr
       ld c,a
 
       ; And then get the offset by modding by $4000 and adding $8000
@@ -496,17 +508,15 @@ MoveHLForward:
   inc hl
   push af
     ld a,h
-    and $f0 ; just 1st digit
     cp $c0  ; Is it c?
-    jr nz,_OK2
+    jr nz,+
     ; Need to decrement by $4000
     res 6,h
     ; and page in the next page
     ld a,(PAGING_SLOT_2)
     inc a
     ld (PAGING_SLOT_2),a
-    _OK2:
-  pop af
++:pop af
   ret
 
 ;==============================================================
@@ -536,15 +546,12 @@ DrawGD3Tag:
       ; Move to first string
       ld a,12
       call MoveHLForwardByA
-
-      ld a,2
-      call _DrawGD3String ; Title
-      call _SkipGD3String
-      call _DrawGD3String ; Game
-      call _SkipGD3String
-      call _DrawGD3String ; System
-      call _SkipGD3String
-      call _DrawGD3String ; Author
+      
+      ; We prefer the English or Japanese according to the system region
+      call _DrawGd3StringForRegion ; Title
+      call _DrawGd3StringForRegion ; Game
+      call _DrawGd3StringForRegion ; System
+      call _DrawGd3StringForRegion ; Author
     pop af
     ld (PAGING_SLOT_2),a
 
@@ -564,6 +571,48 @@ DrawGD3Tag:
 NoTagString:
 .db 32,10,"         - No GD3 tag -",10,32,10,32,10,0
 
+_DrawGd3StringForRegion:
+  ; hl points to the strings, null-separated
+  push hl ; preserve current pointer (to English string)
+    ld a,(hl)
+    inc hl
+    or (hl)
+    inc hl
+    jr nz, +
+    ; No English, use Japanese regardless of region
+    call _DrawGD3String
+-:pop de ; discard preserved value
+  ret
+  
++:  ; We have English, do we prefer it?
+    ld a,(IsJapConsole)
+    ;inc a ; test: force to Japanese
+    or a
+    jr nz,+
+    ; English please
+    dec hl
+    dec hl
+    call _DrawGD3String
+    call _SkipGD3String
+    jr -
+  
++:  ; Japanese preferred, but do we have it?
+    call _SkipGD3String
+    ld a,(hl)
+    inc hl
+    or (hl)
+    jr z, + ; No Japanese, try English
+    ; Else use it
+    inc hl
+    call _DrawGD3String
+    jr -
+    
++:pop hl
+  call _DrawGD3String
+  jp _SkipGD3String ; and ret
+  
+  
+  
 _SkipGD3String:
 ; Move hl forward until after the next zero word
   push bc
@@ -618,9 +667,9 @@ _done:
       jr nz,+
       ld (hl),' ' ; put a space so it'll work properly
       inc hl
-+:    ld (hl),$0a
++:    ld (hl),ASC('\n')
       inc hl
-      ld (hl),$00
+      ld (hl),ASC(0)
       ld hl,GD3DisplayerBuffer
       call WriteASCII
     pop hl
@@ -632,67 +681,319 @@ _done:
 _MapToFont:
   ; bc = UTF-16 word
   ; Return a = character
-  ; Our font has ASCII for 32..126 and then some extra chars
-  ld a,b
-  or a
-  jr nz,_lookup
-  ; <255
-  ld a,c
-  cp ' '
-  jr c,_invalid
-  cp 127
-  jr nc,_lookup
-  ; It is between ' ' and '~', we have those
-  ret
-  
-_invalid:
-  ld a,'?'
-  ret
-
-_lookup:
+  ; Our font is in Unicode order but is not a full set. We therefore apply some offsetting.
   push hl
   push de
-    ld hl,_lookupData
-    ld d,_sizeof__lookupData / 3
--:  ld a,(hl)
-    inc hl
-    cp c
+    ; fullwidth is in the range $ff00+
+    ; We want to convert it to normal width in the range $0020+
+    ; mapping to bc-$ff00+$20 = bc+$120
+    ld a,b
+    cp $ff
     jr nz,+
+; Halfwidth is there too, do we need to support it? Maybe, if it is easy?
+    ld hl,$0120
+    add hl,bc
+    ld b,h
+    ld c,l
+  
++:  ld hl,_lookupData+3 ; No need to start at 0, we backtrack to it if needed
+    ld d,_sizeof__lookupData / 3
+-:  ; Read word from table
     ld a,(hl)
     inc hl
-    cp b
-    jr nz,++
-    ; It's a match
-    ld a,(hl)
-    jr +++    
-    
-+:  inc hl
-++: inc hl
+    push hl
+      ld h,(hl)
+      ld l,a
+      ; Add to bc, we will get carry if -hl>bc
+      add hl,bc
+      jr nc,+
+      ; Carry means -hl wasn't big enough yet
+    pop hl
+    inc hl
+    inc hl
     dec d
+    ; We ran out of table
     jr nz,-
-    ld a,'?' ; no match found
-+++:
-  pop de
+--: ld a,ASC('?') ; no match found
+-:pop de
   pop hl
   ret
+
++:  pop hl
+    ; If we get a carry then we want the previous entry's data. We are pointing at byte 2 of the following entry...
+    dec hl
+    dec hl
+    ld a,(hl) ; byte offset
+    cp -1
+    jr z,-- ; -1 means unhandled range
+    dec hl
+    ld e,(hl)
+    dec hl
+    ld l,(hl)
+    ld h,e
+    add hl,bc
+    add l
+    ; now a = what we wanted
+    jr -
 
 ; UTF-16 and index to use
 _lookupData:
 .table dw, db
-.row $007f, ' ' ; non-breaking space
-.row $00a3, 128 ; '£'
-.row $00a9, 127 ; '©' 
-.row $00b3, 129 ; '³'
-.row $00e0, 'a' ; 'à'
-.row $00e1, 'a' ; 'á'
-.row $00e2, 'a' ; 'â'
-.row $00e3, 'a' ; 'ã'
-.row $00e4, 'a' ; 'ä'
-.row $00e5, 'a' ; 'å'
-.row $00e8, 'e' ; 'è'
-.row $00e9, 130 ; 'é'
-.row $00ea, 'e' ; 'ê'
-.row $00eb, 'e' ; 'ë'
+; For each range of 16-bit Unicode, subtract the word and add the byte to get a tile index.
+; If the byte is -1, it's an invalid char.
+;  !"&'()+,-./0123456789:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz~、いうきくさしすたでとのぷやょよるんァアィイウェエォオカガキギクグケゲコゴサザシジスズセソゾタダチッテデトドナニハバパヒビピフブプヘベペホボポマミムメモャュョラリルレロワンヴ・三上中之二井仁代伝佳保優元克内出剣千博口古史司和圭坂基塚士外大子宮小尾山岩島崎川幸康彦徳忍志忠慎戦早昌朗木本村林橋武河沼法洋王生田知祐福秘穂竹織考草藤行説谷通進郎野鎌長陽雀雄魔
+.row $0000, -1
+.row $ffe0, $00 ; " !""
+.row $ffdd, -1
+.row $ffda, $03 ; "&'()"
+.row $ffd6, -1
+.row $ffd5, $07 ; "+,-./0123456789:;"
+.row $ffc4, -1
+.row $ffc1, $18 ; "?"
+.row $ffc0, -1
+.row $ffbf, $19 ; "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+.row $ffa5, -1
+.row $ff9f, $33 ; "abcdefghijklmnopqrstuvwxyz"
+.row $ff85, -1
+.row $ff82, $4d ; "~"
+.row $ff81, -1
+.row $ff4e, $0e ; "²³"
+.row $ff4c, -1
+.row $ff49, $a5 ; "·"
+.row $ff48, -1
+.row $ff1f, $33 ; "á"
+.row $ff1e, -1
+.row $ff17, $37 ; "é"
+.row $ff16, -1
+.row $cfff, $4e ; "、"
+.row $cffe, -1
+.row $cfbc, $4f ; "い"
+.row $cfbb, -1
+.row $cfba, $50 ; "う"
+.row $cfb9, -1
+.row $cfb3, $51 ; "き"
+.row $cfb2, -1
+.row $cfb1, $52 ; "く"
+.row $cfb0, -1
+.row $cfab, $53 ; "さ"
+.row $cfaa, -1
+.row $cfa9, $54 ; "し"
+.row $cfa8, -1
+.row $cfa7, $55 ; "す"
+.row $cfa6, -1
+.row $cfa1, $56 ; "た"
+.row $cfa0, -1
+.row $cf99, $57 ; "でと"
+.row $cf97, -1
+.row $cf92, $59 ; "の"
+.row $cf91, -1
+.row $cf89, $5a ; "ぷ"
+.row $cf88, -1
+.row $cf7c, $5b ; "や"
+.row $cf7b, -1
+.row $cf79, $5c ; "ょよ"
+.row $cf77, -1
+.row $cf75, $5e ; "る"
+.row $cf74, -1
+.row $cf6d, $5f ; "ん"
+.row $cf6c, -1
+.row $cf5f, $60 ; "ァアィイ"
+.row $cf5b, -1
+.row $cf5a, $64 ; "ウェエォオカガキギクグケゲコゴサザシジスズセ"
+.row $cf44, -1
+.row $cf43, $7a ; "ソゾタダチ"
+.row $cf3e, -1
+.row $cf3d, $7f ; "ッ"
+.row $cf3c, -1
+.row $cf3a, $80 ; "テデトドナニ"
+.row $cf34, -1
+.row $cf31, $86 ; "ハバパヒビピフブプヘベペホボポマミムメモャ"
+.row $cf1c, -1
+.row $cf1b, $9b ; "ュ"
+.row $cf1a, -1
+.row $cf19, $9c ; "ョ"
+.row $cf18, -1
+.row $cf17, $9d ; "ラリルレロ"
+.row $cf12, -1
+.row $cf11, $a2 ; "ワ"
+.row $cf10, -1
+.row $cf0d, $a3 ; "ンヴ"
+.row $cf0b, -1
+.row $cf05, $a5 ; "・ー"
+.row $cf03, -1
+.row $b200, $09 ; "一"
+.row $b1ff, -1
+.row $b1f7, $a6 ; "三上"
+.row $b1f5, -1
+.row $b1d3, $a8 ; "中"
+.row $b1d2, -1
+.row $b1b5, $a9 ; "之"
+.row $b1b4, -1
+.row $b174, $aa ; "二"
+.row $b173, -1
+.row $b16b, $ab ; "井"
+.row $b16a, -1
+.row $b13f, $ac ; "仁"
+.row $b13e, -1
+.row $b11d, $ad ; "代"
+.row $b11c, -1
+.row $b0e3, $ae ; "伝"
+.row $b0e2, -1
+.row $b08d, $af ; "佳"
+.row $b08c, -1
+.row $b023, $b0 ; "保"
+.row $b022, -1
+.row $aed6, $b1 ; "優"
+.row $aed5, -1
+.row $aebd, $b2 ; "元"
+.row $aebc, -1
+.row $aeb5, $b3 ; "克"
+.row $aeb4, -1
+.row $ae7b, $b4 ; "内"
+.row $ae7a, -1
+.row $ae06, $b5 ; "出"
+.row $ae05, -1
+.row $ad9d, $b6 ; "剣"
+.row $ad9c, -1
+.row $acbd, $b7 ; "千"
+.row $acbc, -1
+.row $aca6, $b8 ; "博"
+.row $aca5, -1
+.row $ac1d, $b9 ; "口古"
+.row $ac1b, -1
+.row $ac0e, $bb ; "史"
+.row $ac0d, -1
+.row $ac08, $bc ; "司"
+.row $ac07, -1
+.row $ab74, $bd ; "和"
+.row $ab73, -1
+.row $a8d3, $be ; "圭"
+.row $a8d2, -1
+.row $a8be, $bf ; "坂"
+.row $a8bd, -1
+.row $a806, $c0 ; "基"
+.row $a805, -1
+.row $a7a6, $c1 ; "塚"
+.row $a7a5, -1
+.row $a715, $c2 ; "士"
+.row $a714, -1
+.row $a6ea, $c3 ; "外"
+.row $a6e9, -1
+.row $a6d9, $c4 ; "大"
+.row $a6d8, -1
+.row $a4b0, $c5 ; "子"
+.row $a4af, -1
+.row $a452, $c6 ; "宮"
+.row $a451, -1
+.row $a3f1, $c7 ; "小"
+.row $a3f0, -1
+.row $a3c2, $c8 ; "尾"
+.row $a3c1, -1
+.row $a38f, $c9 ; "山"
+.row $a38e, -1
+.row $a357, $ca ; "岩"
+.row $a356, -1
+.row $a30a, $cb ; "島"
+.row $a309, -1
+.row $a2f2, $cc ; "崎"
+.row $a2f1, -1
+.row $a223, $cd ; "川"
+.row $a222, -1
+.row $a188, $ce ; "幸"
+.row $a187, -1
+.row $a149, $cf ; "康"
+.row $a148, -1
+.row $a09a, $d0 ; "彦"
+.row $a099, -1
+.row $a04d, $d1 ; "徳"
+.row $a04c, -1
+.row $a033, $d2 ; "忍"
+.row $a032, -1
+.row $a029, $d3 ; "志"
+.row $a028, -1
+.row $a020, $d4 ; "忠"
+.row $a01f, -1
+.row $9eb2, $d5 ; "慎"
+.row $9eb1, -1
+.row $9dda, $d6 ; "戦"
+.row $9dd9, -1
+.row $9a17, $d7 ; "早"
+.row $9a16, -1
+.row $99f4, $d8 ; "昌"
+.row $99f3, -1
+.row $98e9, $d9 ; "朗"
+.row $98e8, -1
+.row $98d8, $da ; "木"
+.row $98d7, -1
+.row $98d4, $db ; "本"
+.row $98d3, -1
+.row $98af, $dc ; "村"
+.row $98ae, -1
+.row $9869, $dd ; "林"
+.row $9868, -1
+.row $95b5, $de ; "橋"
+.row $95b4, -1
+.row $949a, $df ; "武"
+.row $9499, -1
+.row $934d, $e0 ; "河"
+.row $934c, -1
+.row $9344, $e1 ; "沼"
+.row $9343, -1
+.row $932b, $e2 ; "法"
+.row $932a, -1
+.row $92f5, $e3 ; "洋"
+.row $92f4, -1
+.row $8c75, $e4 ; "王"
+.row $8c74, -1
+.row $8ae1, $e5 ; "生"
+.row $8ae0, -1
+.row $8ad0, $e6 ; "田"
+.row $8acf, -1
+.row $881b, $e7 ; "知"
+.row $881a, -1
+.row $86b0, $e8 ; "祐"
+.row $86af, -1
+.row $8671, $e9 ; "福"
+.row $8670, -1
+.row $8628, $ea ; "秘"
+.row $8627, -1
+.row $85be, $eb ; "穂"
+.row $85bd, -1
+.row $8507, $ec ; "竹"
+.row $8506, -1
+.row $81ac, $ed ; "織"
+.row $81ab, -1
+.row $7ffd, $ee ; "考"
+.row $7ffc, -1
+.row $7cb7, $ef ; "草"
+.row $7cb6, -1
+.row $7a1c, $f0 ; "藤"
+.row $7a1b, -1
+.row $77b4, $f1 ; "行"
+.row $77b3, -1
+.row $7554, $f2 ; "説"
+.row $7553, -1
+.row $73c9, $f3 ; "谷"
+.row $73c8, -1
+.row $6fe6, $f4 ; "通"
+.row $6fe5, -1
+.row $6fce, $f5 ; "進"
+.row $6fcd, -1
+.row $6f32, $f6 ; "郎"
+.row $6f31, -1
+.row $6e32, $f7 ; "野"
+.row $6e31, -1
+.row $6c74, $f8 ; "鎌"
+.row $6c73, -1
+.row $6a89, $f9 ; "長"
+.row $6a88, -1
+.row $6983, $fa ; "陽"
+.row $6982, -1
+.row $6940, $fb ; "雀"
+.row $693f, -1
+.row $693c, $fc ; "雄"
+.row $693b, -1
+.row $64ac, $fd ; "魔"
 .endt
 .ends
 
@@ -1012,7 +1313,7 @@ VGMInitialise:
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,':' - $20   ; Draw colon (faster than redefining name table address)
+    ld a,ASC(':')   ; Draw colon (faster than redefining name table address)
     out ($be),a
     push hl
     pop hl
@@ -1045,7 +1346,7 @@ VGMInitialise:
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,':' - $20  ; Draw colon (faster than redefining name table address)
+    ld a,ASC(':')  ; Draw colon (faster than redefining name table address)
     out ($be),a
     push hl
     pop hl
@@ -1067,7 +1368,7 @@ VGMInitialise:
     or a
     jr nz,+
     ; defaults
-    ld a,1
+    ld a,VGMSTARTPAGE
     ld hl,$8040
 +:  ld (VGMStartPage),a
     ld (VGMStartOffset),hl
@@ -1915,7 +2216,7 @@ _LessThan8:
     out ($BE),a
     push hl ; delay
     pop hl
-    xor a
+    ld a,>TileIndex_Scale
     out ($BE),a
     inc hl
     djnz -
@@ -1954,11 +2255,16 @@ FrequencyVisString:
 ;     |115|132|155|189|241|333|537|1398
 ;      |118|137|163|200|259|368|636|2330
 ;       |123|143|171|212|280|411|777|6991
-.db " 100  Freq   200  /Hz  500 1k 7k",0
+.asc " 100  Freq   200  /Hz  500 1k 7k",$ff
 
 InitFrequencyVis:
   call UpdatePalette
-  call NormalTilemap    
+  call NormalTilemap
+  
+  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld hl,ScaleData
+  call LoadTiles4BitRLENoDI
+  
   call NoSprites
   call ClearBuffer
   call DrawVisBufferAsBars
@@ -2120,10 +2426,15 @@ _FMNoteThresholds:
 
 .section "Volume bars vis" free
 VolumeVisString:
-.db " Tone 1  Tone 2  Tone 3  Noise  ",0
+.asc " Tone 1  Tone 2  Tone 3  Noise  ",$ff
 InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
+
+  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld hl,ScaleData
+  call LoadTiles4BitRLENoDI
+
   call NoSprites
   call ClearBuffer
   call DrawVisBufferAsBars
@@ -2154,11 +2465,19 @@ ProcessVolumeVis:
 
 .section "Piano vis" free
 PianoVisString:
-.db "       Dave's Piano-matic       ",0
+.asc "       Dave's Piano-matic       ",$ff
 InitPianoVis:
     call UpdatePalette
     call NormalTilemap
-    
+
+    ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
+    ld hl,PianoTiles
+    call LoadTiles4BitRLENoDI
+
+    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
+    ld hl,Hands
+    call LoadTiles4BitRLENoDI
+
     ld hl,PianoVisString
     ld iy,VisTextLocation
     call WriteASCII
@@ -2594,10 +2913,17 @@ _noHands:
 
 .section "No vis" free
 InitNoVis:
+  call TurnOffScreen
+  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld hl,Pad
+  call LoadTiles4BitRLENoDI
+
   call UpdatePalette
-  call NormalTilemap
   call NoSprites
   call BlankVisArea
+  call NormalTilemap
+  call TurnOnScreen
+  
   ret
 .ends
 
@@ -2616,21 +2942,27 @@ InitNoVis:
 ; So now I can traverse the byte-sized tables with XSpeed at Y+64,
 ; and XN at AngleSpeed-128
 SnowText:
-.db 10,"  Dancing snow..",10,10
-.db "               ..with flashing",0
+.asc "\n"
+.asc "  Dancing snow...\n"
+.asc "\n"
+.asc "               ..with flashing",$ff
 
 InitSnowVis:
-  call UpdatePalette
-  call NormalTilemap
-    
-  ; Set sprites to 8x8 mode    
-  ld a,(VDPRegister81Value)
-  and %11111101
-  ld (VDPRegister81Value),a
-  out ($bf),a
-  ld a,$81
-  out ($bf),a
+    call UpdatePalette
+    call NormalTilemap
 
+    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
+    ld hl,Snow
+    call LoadTiles4BitRLENoDI
+
+    ; Set sprites to 8x8 mode    
+    ld a,(VDPRegister81Value)
+    and %11111101
+    ld (VDPRegister81Value),a
+    out ($bf),a
+    ld a,$81
+    out ($bf),a
+  
   call BlankVisArea
 
   ; Fill vis area with my text
@@ -2690,29 +3022,28 @@ ProcessSnowVis:
   ; Get the speed
   ld e,(iy+0)
 
-/* TODO restore this, make it FM sensitive?
-  ; Make it change if the corresponding PSG channel is loud enough
+  ; TODO make it FM sensitive?
+  ; Make it invert X speed if the corresponding PSG channel is loud enough
   push bc
-    push af
-      ld hl,VGMPSGVolumes
-      ld b,0
-      ld c,a  ; 0,1,2,3 or a
-      add hl,bc
-      ld a,(hl)
-      cpl
-      and $0f
-      cp $a
-      jr c,+
-    pop af  ; vol high
-    add a,(ix+1) ; change value semi-randomly
-    jr ++
-
+  push hl
+    ld hl,VGMPSGVolumes
+    ld a,b
+    and 3 ; so it is in the range 0..3
+    ld c,a
+    ld b,0
+    add hl,bc
+    ld a,(hl)
+    cpl
+    and $0f
+    cp $a
+    jr c,+
+    ; Invert the speed
+    ld a,e
+    neg
+    ld (iy+0),a
 +:  ; vol low
-    pop af
-    ; no change
-++:
+  pop hl
   pop bc
-*/  
   
   ; Extend as signed
   ld d,0
@@ -2865,10 +3196,24 @@ LogoPalettes:
 .define NumPalettes _sizeof_LogoPalettes / 3
 
 InitLogoVis:
+  call TurnOffScreen
   call NoSprites
-  ; Switch to secondary tilemap
-  ld hl,$8200 | %11110001 | ($3000 >> 10)
+  
+  ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
+  ld hl,LogoTiles
+  call LoadTiles4BitRLENoDI
+  
+  ; Draw into secondary tilemap at $2800
+  ld hl,LogoTileNumbers
+  ld de,$4000|$2800
+  call LoadTilemapToVRAM
+
+  ; Switch to it secondary tilemap
+  ld hl,$8200 | %11110001 | ($2800 >> 10)
   call SetVDPRegister
+  
+  call TurnOnScreen
+  
   ; Set border to black
   ld hl,$c010
   call SetVDPAddress
@@ -3244,7 +3589,7 @@ VDPRegisterInitData:
 PaletteData:
 .incbin "art\big-numbers.palette"
 .db 0 ; black border
-.incbin "art\sprites.palette" skip 1
+.incbin "art\hands.palette" skip 1
 
 Palettes:
 .db colour(0,1,2),colour(1,2,3),colour(2,3,3)
@@ -3256,16 +3601,20 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Font          dsb 96+32+48+2
-TileIndex_Scale         dsb 9   ; 0-8
+TileIndex_Font          dsb 256
 TileIndex_BigNumbers    dsb 33
 TileIndex_3DPad         dsb 110
-TileIndex_Piano         dsb 11
-TileIndex_Logo          dsb 33
-;TileIndexPadding        db ; Sprites need to be on a multiple of 2
-TileIndex_Sprite_BigHand  dsb 4
-TileIndex_Sprite_SmallHand  dsb 2
-TileIndex_Sprite_Snow  dsb 4
+.union
+  TileIndex_Scale         dsb 9   ; 0-8
+.nextu
+  TileIndex_Piano         dsb 11
+  TileIndex_Sprite_BigHand  dsb 4
+  TileIndex_Sprite_SmallHand  dsb 2
+.nextu
+  TileIndex_Logo          dsb 33
+.nextu
+  TileIndex_Sprite_Snow  dsb 4
+.endu
 .ende
 
 .macro TileMapFilter
@@ -3294,12 +3643,60 @@ ScaleData:
 .incbin "art\scale.tiles.pscompr"
 
 TextData:
-.incbin "Text.txt"
-.db $00
+.asc "   SMS VGM player\n"
+.asc "   v2.00 by Maxim\n"
+.asc "\n"
+.asc "  Time       Loop\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "    Total\n"
+.asc "    Loop\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc "\n"
+.asc " https://www.smspower.org/Music\n"
+.asc "JP:__ Location:__/____\n"
+.asc "50:__ Wait:____\n"
+.asc "FM:__\n"
+.db $ff
 
 NoVGMText:
-.incbin "no-vgm-file-message.txt"
-.db $00
+.asc "        ################\n"
+.asc "        # No VGM file! #\n"
+.asc "        ################\n"
+.asc "\n"
+.asc " No VGM file has been found by\n"
+.asc " the player. You have to add a\n"
+.asc " file to the player for it to\n"
+.asc " work. You can do this by using\n"
+.asc " this commandline:\n"
+.asc "\n"
+.asc " copy /b vgmplayer.stub+\n"
+.asc "         vgmfile.vgm output.sms\n"
+.asc "\n"
+.asc "      (all on one line)\n"
+.asc " where:\n"
+.asc " - vgmplayer.stub is the 16KB\n"
+.asc "   player file\n"
+.asc " - vgmfile.vgm is an\n"
+.asc "   UNCOMPRESSED VGM file\n"
+.asc " - output.sms is the combined\n"
+.asc "   file which will be created\n"
+.asc "\n"
+.asc "  http://www.smspower.org/Music\n"
+.db $ff
 
 PianoTiles:
 .incbin "art\piano.tiles.pscompr"
@@ -3307,8 +3704,11 @@ PianoTiles:
 PianoTileNumbers:
   TileMapFilteredIncBin("art\piano.tilemap.bin", TileIndex_Piano)
 
-Sprites:
-.incbin "art\sprites.tiles.8x16.pscompr"
+Hands:
+.incbin "art\hands.tiles.8x16.pscompr"
+
+Snow:
+.incbin "art\snow.tiles.8x16.pscompr"
 
 LogoTiles:
 .incbin "art\screensaver.tiles.pscompr"
@@ -3515,6 +3915,17 @@ TurnOffScreen:
         out ($bf),a
     pop af
     ret
+
+TurnOnScreen:
+    push af
+        ld a,(VDPRegister81Value)
+        or %01000000
+        ld (VDPRegister81Value),a
+        out ($bf),a
+        ld a,$81
+        out ($bf),a
+    pop af
+    ret
 .ends
 
 ;==============================================================
@@ -3563,7 +3974,7 @@ LoadPalette:
 ; Write ASCII text pointed to by hl to VRAM
 ; Stops when it finds a null byte, skips control characters,
 ; understands \n
-; Pass name table address in iy, it will be modified
+; Pass name table address in iy, it will not be modified
 ;==============================================================
 .section "Write ASCII" FREE
 VRAMToIY:
@@ -3578,38 +3989,32 @@ WriteASCII:
     push af
     push bc
     push hl
-        call VRAMToIY
-        _WriteTilesLoop:
-            ld a,(hl)    ; Value to write
-            cp $00        ; compare a with $00, set z flag if they match
-            jp z,_WriteTilesLoopEnd    ; if so, it's the string end so stop writing it
-            cp 10        ; Check for LF
-            jp z,_NewLine
-            sub $20
-            jp c,_SkipControlChar
-            out ($BE),a    ; Output to VRAM address, which is auto-incremented after each write
-            ld a,%00000000
-            push hl
-            pop hl  ; delay
-            out ($BE),a
-            _SkipControlChar:
-            inc hl
-            jp _WriteTilesLoop
-        _NewLine:
-            ; Go to the next line, ie. next multiple of 32=$20
-            push hl
-                push iy
-                pop hl
-                ld bc,64
-                add hl,bc
-                push hl
-                pop iy
-                call VRAMToIY
-            pop hl
-            _NoNewLine:
-            inc hl
-            jp _WriteTilesLoop
-        _WriteTilesLoopEnd:
+      call VRAMToIY
+-:    ld a,(hl)    ; Value to write
+      inc hl
+      cp $ff ; EOT
+      jr z,_done
+      cp $fe ; Newline
+      jp z,_NewLine
+      out ($BE),a    ; Output to VRAM address, which is auto-incremented after each write
+      ld a,0
+      push hl
+      pop hl  ; delay
+      out ($BE),a
+      jp -
+_NewLine:
+      ; Go to the next line, ie. next multiple of 32=$20
+      push hl
+        push iy
+        pop hl
+        ld bc,64
+        add hl,bc
+        call VRAMToHL
+        push hl
+        pop iy
+      pop hl
+      jp -
+_done:
     pop hl
     pop bc
     pop af
@@ -3730,10 +4135,9 @@ WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
 
 WriteDigit:     ; writes the digit in a
     cp $0a      ; compare it to A - if it's less then it's 0-9
-    jp c,IsNum
-        add a,$07   ; if it's >9 then make it point at A-F
-    IsNum:
-    add a,$10
+    jp c,+
+    add a,ASC('A')-ASC('9')+1   ; if it's >9 then make it point at A-F
++:  add a,ASC('0')
 
     out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
     push hl

@@ -21,7 +21,7 @@ art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
 art/screensaver.tilemap.pscompr: art/screensaver.png
-	$(BMP2TILE) $< -tileoffset 341 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 399 -savetilemap $@
 
 %.tilemap.pscompr: %.png
 	$(BMP2TILE) $< -savetilemap $@
@@ -56,7 +56,6 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 clean:
 	del art\*.pscompr
 	del art\*.bin
-	del art\*.lsbtilemap
 	del art\*.palette
 	del smsvgmplayer.stub
 	del smsvgmplayer.stub.o
