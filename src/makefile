@@ -29,10 +29,19 @@ art/screensaver.tilemap.pscompr: art/screensaver.png
 %.tiles.pscompr: %.png
 	$(BMP2TILE) $< -savetiles $@
 
+%.tiles.psgcompr: %.png
+	$(BMP2TILE) $< -savetiles $@
+
 %.tiles.withdupes.pscompr: %.png
 	$(BMP2TILE) $< -noremovedupes -savetiles $@
 
+%.tiles.withdupes.psgcompr: %.png
+	$(BMP2TILE) $< -noremovedupes -savetiles $@
+
 %.tiles.8x16.pscompr: %.png
+	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
+
+%.tiles.8x16.psgcompr: %.png
 	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
 
 %.palette: %.png
@@ -55,6 +64,7 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 
 clean:
 	del art\*.pscompr
+	del art\*.psgcompr
 	del art\*.bin
 	del art\*.palette
 	del smsvgmplayer.stub

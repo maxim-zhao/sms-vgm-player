@@ -8,7 +8,7 @@
 
 ;.define Debug
 
-.define VGMSTARTPAGE 2 ; 1 for 16KB, 2 for 32KB
+.define VGMSTARTPAGE 1 ; 1 for 16KB, 2 for 32KB
 
 ; This is sensitive to our font image
 .asciitable
@@ -53,21 +53,35 @@ map "~" = $4d
 .endm
 
 ; WLA-DX banking setup
+.if VGMSTARTPAGE == 1
+
 .memorymap
 defaultslot 0
-slotsize $7ff0
+slotsize $4000
 slot 0 $0000
-slotsize $0010
-slot 1 $7ff0
 .endme
 
 .rombankmap
-bankstotal 2
-banksize $7ff0
-banks 1
-banksize $0010
+bankstotal 1
+banksize $4000
 banks 1
 .endro
+
+.else
+
+.memorymap
+defaultslot 0
+slotsize $8000
+slot 0 $0000
+.endme
+
+.rombankmap
+bankstotal 1
+banksize $8000
+banks 1
+.endro
+
+.endif
 
 .bank 0 slot 0
 .org $0000
@@ -111,9 +125,14 @@ GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 InitVisDI                       db
+PSGDecoderBuffer                dsb 34
 .ende
 
+.bank 0 slot 0
+.org 0
+
 .include "PhantasyStardecompressors.asm"
+.include "PhantasyStarGaidenDecompressor.asm"
 
 .define PAGING_SLOT_0 $fffd
 .define PAGING_SLOT_1 $fffe
@@ -235,7 +254,7 @@ main:
   ld (PAGING_SLOT_0),a
   inc a
   ld (PAGING_SLOT_1),a
-  inc a
+  ld a,VGMSTARTPAGE
   ld (PAGING_SLOT_2),a
 
   call TurnOffScreen
@@ -294,17 +313,17 @@ main:
 .function TileVRAMAddressFromIndex(n) $4000+n*32
 
   ; Load tiles
-  ld de,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
-  ld hl,TileData
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
+  ld ix,TileData
+  call PSG_decompress
 
-  ld de,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
-  ld hl,BigNumbers
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
+  ld ix,BigNumbers
+  call PSG_decompress
 
-  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
-  ld hl,Pad
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld ix,Pad
+  call PSG_decompress
 
   ; Initial button state values (all off)
   ld a,$ff
@@ -2261,9 +2280,9 @@ InitFrequencyVis:
   call UpdatePalette
   call NormalTilemap
   
-  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
-  ld hl,ScaleData
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld ix,ScaleData
+  call PSG_decompress
   
   call NoSprites
   call ClearBuffer
@@ -2431,9 +2450,9 @@ InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
 
-  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
-  ld hl,ScaleData
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld ix,ScaleData
+  call PSG_decompress
 
   call NoSprites
   call ClearBuffer
@@ -2470,13 +2489,13 @@ InitPianoVis:
     call UpdatePalette
     call NormalTilemap
 
-    ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
-    ld hl,PianoTiles
-    call LoadTiles4BitRLENoDI
+    ld hl,TileVRAMAddressFromIndex(TileIndex_Piano)
+    ld ix,PianoTiles
+    call PSG_decompress
 
-    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
-    ld hl,Hands
-    call LoadTiles4BitRLENoDI
+    ld hl,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
+    ld ix,Hands
+    call PSG_decompress
 
     ld hl,PianoVisString
     ld iy,VisTextLocation
@@ -2914,9 +2933,9 @@ _noHands:
 .section "No vis" free
 InitNoVis:
   call TurnOffScreen
-  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
-  ld hl,Pad
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld ix,Pad
+  call PSG_decompress
 
   call UpdatePalette
   call NoSprites
@@ -2951,9 +2970,9 @@ InitSnowVis:
     call UpdatePalette
     call NormalTilemap
 
-    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
-    ld hl,Snow
-    call LoadTiles4BitRLENoDI
+    ld hl,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
+    ld ix,Snow
+    call PSG_decompress
 
     ; Set sprites to 8x8 mode    
     ld a,(VDPRegister81Value)
@@ -3199,9 +3218,9 @@ InitLogoVis:
   call TurnOffScreen
   call NoSprites
   
-  ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
-  ld hl,LogoTiles
-  call LoadTiles4BitRLENoDI
+  ld hl,TileVRAMAddressFromIndex(TileIndex_Logo)
+  ld ix,LogoTiles
+  call PSG_decompress
   
   ; Draw into secondary tilemap at $2800
   ld hl,LogoTileNumbers
@@ -3626,21 +3645,21 @@ TileIndex_3DPad         dsb 110
 .endm
 
 TileData:
-.incbin "fonts\ZXChicagoPod.tiles.withdupes.pscompr"
+.incbin "fonts\ZXChicagoPod.tiles.withdupes.psgcompr"
 
 BigNumbers:
-.incbin "art\big-numbers.tiles.pscompr"
+.incbin "art\big-numbers.tiles.psgcompr"
 BigNumbersTilemap:
   TileMapFilteredIncBin("art\big-numbers.tilemap.bin", TileIndex_BigNumbers)
 
 Pad:
-.incbin "art\3d-pad.tiles.pscompr"
+.incbin "art\3d-pad.tiles.psgcompr"
 
 PadData:
   TileMapFilteredIncBin("art\3d-pad.tilemap.bin", TileIndex_3DPad)
 
 ScaleData:
-.incbin "art\scale.tiles.pscompr"
+.incbin "art\scale.tiles.psgcompr"
 
 TextData:
 .asc "   SMS VGM player\n"
@@ -3699,19 +3718,19 @@ NoVGMText:
 .db $ff
 
 PianoTiles:
-.incbin "art\piano.tiles.pscompr"
+.incbin "art\piano.tiles.psgcompr"
 
 PianoTileNumbers:
   TileMapFilteredIncBin("art\piano.tilemap.bin", TileIndex_Piano)
 
 Hands:
-.incbin "art\hands.tiles.8x16.pscompr"
+.incbin "art\hands.tiles.8x16.psgcompr"
 
 Snow:
-.incbin "art\snow.tiles.8x16.pscompr"
+.incbin "art\snow.tiles.8x16.psgcompr"
 
 LogoTiles:
-.incbin "art\screensaver.tiles.pscompr"
+.incbin "art\screensaver.tiles.psgcompr"
 
 LogoTileNumbers:
 .incbin "art\screensaver.tilemap.pscompr"
