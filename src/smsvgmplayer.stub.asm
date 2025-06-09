@@ -2964,7 +2964,7 @@ SnowText:
 .asc "\n"
 .asc "  Dancing snow...\n"
 .asc "\n"
-.asc "               ..with flashing",$ff
+.asc "              ...with flashing",$ff
 
 InitSnowVis:
     call UpdatePalette

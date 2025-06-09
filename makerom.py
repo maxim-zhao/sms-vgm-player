@@ -26,7 +26,7 @@ def make_rom(filename):
         with open(filename, "rb") as vgm:
             # Check for gzip
             if vgm.read(2) == b'\x1f\x8b':
-                isGzip = true
+                isGzip = True
             else:
                 vgm.seek(0)
                 output.write(vgm.read())
