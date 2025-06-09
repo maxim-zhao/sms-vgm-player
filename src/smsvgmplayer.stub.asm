@@ -336,13 +336,13 @@ main:
   call WriteASCII
   
   ; Fix up colons
-  ld hl,TilemapAddress(6,6)
+  ld hl,TilemapAddress(6,5)
   call VRAMToHL
   ld a,<(TileIndex_BigNumbers+17)
   out ($be),a
   ld a,>(TileIndex_BigNumbers+17)
   out ($be),a
-  ld hl,TilemapAddress(6,7)
+  ld hl,TilemapAddress(6,6)
   call VRAMToHL
   ld a,<(TileIndex_BigNumbers+17)
   out ($be),a
@@ -1026,7 +1026,7 @@ ShowTime:
   ; get digits
   ld de,(VGMTimeMins)     ; d = sec  e = min
   ; Set start name table address
-  ld hl, TilemapAddress(2, 6)
+  ld hl, TilemapAddress(2, 5)
   ; Output digit(s)
   ld b,e
   call DrawByte
@@ -1050,7 +1050,7 @@ ShowLoopNumber:
     push hl
       ld a,(VGMLoopsPlayed)
       ld b,a
-      ld hl, TilemapAddress(13, 6)
+      ld hl, TilemapAddress(13, 5)
       call DrawByte
       xor a
       ld (LoopsChanged),a
@@ -3663,7 +3663,7 @@ ScaleData:
 
 TextData:
 .asc "   SMS VGM player\n"
-.asc "   v2.00 by Maxim\n"
+.asc "   v2.01 by Maxim\n"
 .asc "\n"
 .asc "  Time       Loop\n"
 .asc "\n"
