@@ -6,9 +6,9 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-;.define Debug
+.define Debug
 
-.define VGMSTARTPAGE 1 ; 1 for 16KB, 2 for 32KB
+.define VGMSTARTPAGE 8 ; 1 for 16KB, 2 for 32KB
 
 ; This is sensitive to our font image
 .asciitable
@@ -53,35 +53,19 @@ map "~" = $4d
 .endm
 
 ; WLA-DX banking setup
-.if VGMSTARTPAGE == 1
-
 .memorymap
 defaultslot 0
 slotsize $4000
 slot 0 $0000
+slot 1 $4000
+slot 2 $8000
 .endme
 
 .rombankmap
-bankstotal 1
+bankstotal 8
 banksize $4000
-banks 1
+banks 8
 .endro
-
-.else
-
-.memorymap
-defaultslot 0
-slotsize $8000
-slot 0 $0000
-.endme
-
-.rombankmap
-bankstotal 1
-banksize $8000
-banks 1
-.endro
-
-.endif
 
 .bank 0 slot 0
 .org $0000
@@ -126,13 +110,27 @@ VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 InitVisDI                       db
 PSGDecoderBuffer                dsb 34
+PrevOffset dw ; ZX0 memory
+ZX0TempBuffer dsb 1000 ; May be more...
 .ende
 
 .bank 0 slot 0
 .org 0
 
-.include "PhantasyStardecompressors.asm"
+;.include "PhantasyStardecompressors.asm"
 .include "PhantasyStarGaidenDecompressor.asm"
+;.section "LZSA2 decompressor" free
+;.include "unlzsa2_fast.asm"
+;.ends
+.section "ZX0 decompressor" free
+.include "dzx0_fast_sms.asm"
+.ends
+; Uncompressed: 98104
+; LZSA2:        62051
+; LZSA1:        66210
+; ZX7:          63749
+; ZX0:          58461
+; Maybe change later?
 
 .define PAGING_SLOT_0 $fffd
 .define PAGING_SLOT_1 $fffe
@@ -144,13 +142,14 @@ PSGDecoderBuffer                dsb 34
 ;==============================================================
 ; Boot section
 ;==============================================================
-.section "!Boot section" FORCE   ; Standard stuff (for the SMS anyway)
+.section "Boot section" force   ; Standard stuff (for the SMS anyway)
   di              ; disable interrupts (re-enable later)
   im 1            ; Interrupt mode 1
   ld sp, $dff0    ; load stack pointer to not-quite-the-end of user RAM (avoiding paging regs)
   jr main         ; jump to main program
 .ends
 
+.bank 0 slot 0
 .org $10
 .section "GetByte" force
 GetByte:
@@ -331,9 +330,9 @@ main:
   ld (ButtonState),a
 
   ; Draw text
-  ld iy,TilemapAddress(0, 0)
-  ld hl,TextData
-  call WriteASCII
+  ;ld iy,TilemapAddress(0, 0)
+  ;ld hl,TextData
+  ;call WriteASCII
   
   ; Fix up colons
   ld hl,TilemapAddress(6,5)
@@ -2952,14 +2951,14 @@ InitNoVis:
   ; I want to have various data for each snowflake, but I also want to make the sprite table upload easy.
   ; So I have a table of XNs and a table of Ys...
   ; And then the extra data, aligned relative to the preceding for constant offsets
-  SnowflakeYs dsb 64
-  SnowflakeXSpeeds dsb 64 ; <- iy points here
-  SnowflakeXLos dsb 64
-  SnowflakeXNs dsw 64
-  SnowflakeAngleSpeeds dsw 64 ; <- ix points here
+  SnowflakeYs dsb NumSnowFlakes
+  SnowflakeXSpeeds dsb NumSnowFlakes ; <- iy points here
+  SnowflakeXLos dsb NumSnowFlakes
+  SnowflakeXNs dsw NumSnowFlakes
+  SnowflakeAngleSpeeds dsw NumSnowFlakes ; <- ix points here
 .ende
-; So now I can traverse the byte-sized tables with XSpeed at Y+64,
-; and XN at AngleSpeed-128
+; So now I can traverse the byte-sized tables with XSpeed at Y+NumSnowFlakes,
+; and XN at AngleSpeed-NumSnowFlakes*2
 SnowText:
 .asc "\n"
 .asc "  Dancing snow...\n"
@@ -2995,7 +2994,7 @@ InitSnowVis:
   ld b,NumSnowFlakes
 -:ld (hl),a
   inc hl
-  add a,3
+  add a,192/NumSnowFlakes
   djnz -
   
   ; Then X speeds
@@ -3036,8 +3035,8 @@ ProcessSnowVis:
   ld b,NumSnowFlakes
 -:; For each snowflake...
   ; Get the current X
-  ld l,(iy+64)
-  ld h,(ix-128)
+  ld l,(iy+NumSnowFlakes)
+  ld h,(ix-NumSnowFlakes*2)
   ; Get the speed
   ld e,(iy+0)
 
@@ -3072,8 +3071,8 @@ ProcessSnowVis:
 +:; now de = speed to add
   add hl,de
   ; Save back
-  ld (iy+64),l
-  ld (ix-128),h
+  ld (iy+NumSnowFlakes),l
+  ld (ix-NumSnowFlakes*2),h
   
   ; And apply the spin
   ld a,(ix+0) ; Angle
@@ -3087,16 +3086,16 @@ ProcessSnowVis:
   rlca
   and %11
   add a,TileIndex_Sprite_Snow   ; start of snowflake sprites
-  ld (ix-127),a
+  ld (ix-NumSnowFlakes*2+1),a
   
   ; Just increment Y
-  ld a,(iy-64)
+  ld a,(iy-NumSnowFlakes)
   inc a
   cp 192
   jr nz,+
   ; We want to randomise the X, speed and spin again
   call GetRandomNumber
-  ld (ix-128),a ; X
+  ld (ix-NumSnowFlakes*2),a ; X
   call GetRandomNumber
   ld (iy+0),a ; speed
   call GetRandomNumber
@@ -3104,7 +3103,7 @@ ProcessSnowVis:
   sub %00001111
   ld (ix+1),a ; Rotation speed
   ld a,-8
-+:ld (iy-64),a ; Y
++:ld (iy-NumSnowFlakes),a ; Y
   
   ; Move on
   inc iy
@@ -3145,7 +3144,7 @@ DrawSnowVis:
 
   ld hl,SpriteTableBaseAddress+128
   call VRAMToHL
-  ld b,0 ; for 128 bytes*2
+  ld b,<(NumSnowFlakes*2*2)
   ld hl,SnowflakeXNs
 -:outi
   djnz -
@@ -3660,7 +3659,7 @@ PadData:
 
 ScaleData:
 .incbin "art\scale.tiles.psgcompr"
-
+/*
 TextData:
 .asc "   SMS VGM player\n"
 .asc "   v2.01 by Maxim\n"
@@ -3690,7 +3689,7 @@ TextData:
 .asc "50:__ Wait:____\n"
 .asc "FM:__\n"
 .db $ff
-
+*/
 NoVGMText:
 .asc "        ################\n"
 .asc "        # No VGM file! #\n"
@@ -3733,7 +3732,7 @@ LogoTiles:
 .incbin "art\screensaver.tiles.psgcompr"
 
 LogoTileNumbers:
-.incbin "art\screensaver.tilemap.pscompr"
+.incbin "art\screensaver.tilemap.zx0"
 
 
 .section "Save/load settings in BBRAM" FREE
@@ -4277,3 +4276,31 @@ HasFMChip:
     ret
 .ends
 
+.include "fonts/font.asm"
+
+.section "ZX0 art shims" free
+; Decompresses tilemap data from hl to VRAM address de
+LoadTilemapToVRAM:
+  ; Decompress to RAM
+  push de
+    ld de, ZX0TempBuffer
+    call DecompressZX0
+    ; de points at the end of data
+    ; compute bc = length
+    ld hl, $10000 - ZX0TempBuffer
+    add hl, de
+    ld b, h
+    ld c, l
+  pop hl
+  ; Then copy to VRAM
+  call VRAMToHL
+  ld hl, ZX0TempBuffer
+-:ld a, (hl)
+  out ($be), a
+  inc hl
+  dec bc
+  ld a, b
+  or c
+  ret z
+  jp -
+.ends

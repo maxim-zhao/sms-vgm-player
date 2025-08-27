@@ -15,3 +15,5 @@ auto.makefile
 *.db
 *.bin
 *.psgcompr
+*.zx0
+/src/fonts/font.asm

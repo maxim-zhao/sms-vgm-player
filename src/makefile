@@ -11,6 +11,7 @@ BMP2TILE = bmp2tile.exe
 default: smsvgmplayer.stub
 
 # WLA DX will tell us what files we need
+# Problem: it can't tell us about files needed by generated asm...
 auto.makefile: smsvgmplayer.stub.asm
 	$(WLAZ80) -M -t -o smsvgmplayer.stub.o smsvgmplayer.stub.asm > $@
 
@@ -20,14 +21,14 @@ auto.makefile: smsvgmplayer.stub.asm
 art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
-art/screensaver.tilemap.pscompr: art/screensaver.png
+art/screensaver.tilemap.zx0: art/screensaver.png
 	$(BMP2TILE) $< -tileoffset 399 -savetilemap $@
 
-%.tilemap.pscompr: %.png
-	$(BMP2TILE) $< -savetilemap $@
-
-%.tiles.pscompr: %.png
-	$(BMP2TILE) $< -savetiles $@
+#%.tilemap.pscompr: %.png
+#	$(BMP2TILE) $< -savetilemap $@
+#
+#%.tiles.pscompr: %.png
+#	$(BMP2TILE) $< -savetiles $@
 
 %.tiles.psgcompr: %.png
 	$(BMP2TILE) $< -savetiles $@
@@ -47,6 +48,18 @@ art/screensaver.tilemap.pscompr: art/screensaver.png
 %.palette: %.png
 	$(BMP2TILE) $< -fullpalette -savepalette $@
 
+fonts/%.bin.lzsa2: fonts/%.bin
+	fonts/lzsa.exe -r -f 2 $< $@
+
+fonts/%.bin.zx0: fonts/%.bin
+	fonts/zx0.exe -f $< $@
+
+fonts/%.bin: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
+	python fonts/fontdump.py -size=8 -offset=-1 fonts/ZX_Chicago.ttf -offset=0 fonts/misaki_gothic.ttf -outdir=fonts
+
+fonts/font.asm: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
+	python fonts/fontdump.py -size=8 -offset=-1 fonts/ZX_Chicago.ttf -offset=0 fonts/misaki_gothic.ttf -outdir=fonts
+
 # And then we build it
 %.o: 
 	$(WLAZ80) -o $@ $<
@@ -56,10 +69,8 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 	echo $< >> linkfile
 	$(WLALINK) -d -r -v -S linkfile $@
 
-# To guarantee at least 64KB, we copy three stubs on the end(!)
-# Else Emulicious won't emulate a mapper
 %.sms: % smsvgmplayer.stub
-	copy /y /b smsvgmplayer.stub+$<+smsvgmplayer.stub+smsvgmplayer.stub+smsvgmplayer.stub $@
+	copy /y /b smsvgmplayer.stub+$< $@
 	copy /y smsvgmplayer.sym $@.sym
 
 clean:
@@ -70,3 +81,5 @@ clean:
 	del smsvgmplayer.stub
 	del smsvgmplayer.stub.o
 	del auto.makefile
+	del fonts\*.bin*
+	del fonts\font.asm
