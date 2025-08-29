@@ -24,6 +24,9 @@ art/%.tilemap.bin: art/%.png
 art/screensaver.tilemap.zx0: art/screensaver.png
 	$(BMP2TILE) $< -tileoffset 399 -savetilemap $@
 
+art/3d-pad.tilemap.zx0: art/3d-pad.png
+	$(BMP2TILE) $< -tileoffset 289 -savetilemap $@
+
 #%.tilemap.pscompr: %.png
 #	$(BMP2TILE) $< -savetilemap $@
 #
@@ -51,7 +54,7 @@ art/screensaver.tilemap.zx0: art/screensaver.png
 fonts/%.bin.lzsa2: fonts/%.bin
 	fonts/lzsa.exe -r -f 2 $< $@
 
-fonts/%.bin.zx0: fonts/%.bin
+%.bin.zx0: %.bin
 	fonts/zx0.exe -f $< $@
 
 fonts/%.bin: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf

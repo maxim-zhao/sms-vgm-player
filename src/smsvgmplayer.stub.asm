@@ -23,7 +23,7 @@ map "a" to "z" = $33
 map "~" = $4d
 .enda
 
-.function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32) 
+.function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32)+$4000
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
 
 .macro SetDebugColour(r,g,b)
@@ -110,7 +110,7 @@ VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 InitVisDI                       db
 PSGDecoderBuffer                dsb 34
-PrevOffset dw ; ZX0 memory
+ZX0Memory dw
 ZX0TempBuffer dsb 1000 ; May be more...
 .ende
 
@@ -350,8 +350,8 @@ main:
 
   ; Draw pad image
   ld bc,$0c0b     ; 12x11
-  ld ix,PadData
-  ld iy,TilemapAddress(19, 1)
+  ld hl,PadData
+  ld de,TilemapAddress(19, 1)
   call DrawImageArea
 
   ; Put something in the shift register
@@ -3655,7 +3655,7 @@ Pad:
 .incbin "art\3d-pad.tiles.psgcompr"
 
 PadData:
-  TileMapFilteredIncBin("art\3d-pad.tilemap.bin", TileIndex_3DPad)
+.incbin "art\3d-pad.tilemap.zx0"
 
 ScaleData:
 .incbin "art\scale.tiles.psgcompr"
@@ -4038,7 +4038,7 @@ _done:
     pop af
     ret
 .ends
-
+/*
 ;==============================================================
 ; Image loader (bytes)
 ; Parameters:
@@ -4067,7 +4067,7 @@ DrawImageArea:
     jp nz,--
     ret
 .ends
-
+*/
 ;==============================================================
 ; Set VRAM address to hl
 ;==============================================================
@@ -4281,6 +4281,7 @@ HasFMChip:
 .section "ZX0 art shims" free
 ; Decompresses tilemap data from hl to VRAM address de
 LoadTilemapToVRAM:
+  
   ; Decompress to RAM
   push de
     ld de, ZX0TempBuffer
@@ -4303,4 +4304,43 @@ LoadTilemapToVRAM:
   or c
   ret z
   jp -
+
+VRAMToDE:
+  ld a, e
+  out ($bf), a
+  ld a, d
+  out ($bf), a
+  ret
+
+DrawImageArea:
+  ; source in hl
+  ; dest in de
+  ; width in b
+  ; height in c
+  push de
+  push bc
+    ld de, ZX0TempBuffer
+    call DecompressZX0
+  pop bc
+  pop de
+  ld hl, ZX0TempBuffer
+-:call VRAMToDE
+  push bc
+    ; Emit b*2 bytes
+--: ld a, (hl)
+    out ($be), a
+    inc hl
+    ld a, (hl)
+    out ($be), a
+    inc hl
+    djnz --
+    ; Move VRAM address on by 64 bytes
+    ld bc, 64
+    ex de, hl
+    add hl, bc
+    ex de, hl
+  pop bc
+  dec c
+  jp nz, -
+  ret  
 .ends
