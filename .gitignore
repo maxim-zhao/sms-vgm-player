@@ -17,3 +17,4 @@ auto.makefile
 *.psgcompr
 *.zx0
 /src/fonts/font.asm
+/src/fonts/chunk*.png

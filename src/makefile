@@ -50,11 +50,10 @@ art/3d-pad.tilemap.zx0: art/3d-pad.png
 fonts/%.bin.zx0: fonts/%.bin
 	fonts/zx0.exe -f $< $@
 
-fonts/%.bin: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
-	python fonts/fontdump.py -size=8 -offset=-1 fonts/ZX_Chicago.ttf -offset=0 fonts/misaki_gothic.ttf -outdir=fonts
+fonts/%.bin: fonts/font.asm
 
 fonts/font.asm: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
-	python fonts/fontdump.py -size=8 -offset=-1 fonts/ZX_Chicago.ttf -offset=0 fonts/misaki_gothic.ttf -outdir=fonts
+	python fonts/fontdump.py -size=8 -offset=-1 fonts/ZX_Chicago.ttf -offset=0 fonts/misaki_gothic.ttf -outdir=fonts -skip=ff,26,25,24,22,21,20,4,3
 
 # And then we build it
 %.o: 

@@ -27,9 +27,6 @@ def get_font_codepoints(path):
             if isinstance(x, fontTools.ttLib.tables._c_m_a_p.cmap_format_6):
                 continue # Misaki has boxes in a table like this, but we want to exclude them
             for y in x.cmap.items():
-                #if y[0] < 128:
-                #    # We don't want ASCII (?)
-                #    continue
                 yield (y[0], Unicode[y[0]])
 
 
@@ -85,6 +82,7 @@ def convert(args):
     offset = 0
     filename = ''
     outdir = '.'
+    skip = set()
     for arg in args[1:]:
         match = re.fullmatch("-([a-z]+)=(.+)", arg)
         if match:
@@ -96,6 +94,8 @@ def convert(args):
                 offset = int(value)
             elif key == 'outdir':
                 outdir = value
+            elif key == 'skip':
+                skip.update([int(x, 16) for x in value.split(',')])
             else:
                 print(f"Unknown key {key}")
         else:
@@ -110,6 +110,9 @@ def convert(args):
 
     # Transfer to a sorted list
     chars = sorted(codepoints.values(), key=lambda x: x.codepoint)
+    
+    # Remove the skipped ones
+    chars = [x for x in chars if x.codepoint // 256 not in skip]
     
     # 7-8. Save lookup table
     # Plan:
@@ -154,6 +157,15 @@ def convert(args):
                             bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
                             byte |= (bit << (7 - y))  # Top pixel is MSB
                         bin.write(struct.pack('B', byte))
+                # Also an image so I know what's in there
+                sheet = Image.new('RGB', (128, 128), (0, 0, 0))
+                for y in range(0, 128, 8):
+                    for x in range(0, 128, 8):
+                        index = y // 8 * 16 + x // 8
+                        if index in local_chars:
+                            sheet.paste(local_chars[index].img, (x, y))
+                sheet.save(f'{outdir}/chunk{i:02x}.png')
+            
         asm.write('.ends\n')
 
         # Then emit to the asm, expecting compression to happen in the meantime
