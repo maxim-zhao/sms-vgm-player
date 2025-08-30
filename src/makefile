@@ -17,7 +17,6 @@ auto.makefile: smsvgmplayer.stub.asm
 
 -include auto.makefile
 
-# We want to build the resources automatically
 art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
@@ -27,34 +26,28 @@ art/screensaver.tilemap.zx0: art/screensaver.png
 art/3d-pad.tilemap.zx0: art/3d-pad.png
 	$(BMP2TILE) $< -tileoffset 289 -savetilemap $@
 
-#%.tilemap.pscompr: %.png
-#	$(BMP2TILE) $< -savetilemap $@
-#
-#%.tiles.pscompr: %.png
-#	$(BMP2TILE) $< -savetiles $@
-
 %.tiles.psgcompr: %.png
 	$(BMP2TILE) $< -savetiles $@
 
-%.tiles.withdupes.pscompr: %.png
-	$(BMP2TILE) $< -noremovedupes -savetiles $@
+%.tiles.zx0: %.png
+	$(BMP2TILE) $< -savetiles $@
 
 %.tiles.withdupes.psgcompr: %.png
 	$(BMP2TILE) $< -noremovedupes -savetiles $@
 
-%.tiles.8x16.pscompr: %.png
-	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
+%.tiles.withdupes.zx0: %.png
+	$(BMP2TILE) $< -noremovedupes -savetiles $@
 
 %.tiles.8x16.psgcompr: %.png
+	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
+
+%.tiles.8x16.zx0: %.png
 	$(BMP2TILE) $< -noremovedupes -8x16 -savetiles $@
 
 %.palette: %.png
 	$(BMP2TILE) $< -fullpalette -savepalette $@
 
-fonts/%.bin.lzsa2: fonts/%.bin
-	fonts/lzsa.exe -r -f 2 $< $@
-
-%.bin.zx0: %.bin
+fonts/%.bin.zx0: fonts/%.bin
 	fonts/zx0.exe -f $< $@
 
 fonts/%.bin: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf

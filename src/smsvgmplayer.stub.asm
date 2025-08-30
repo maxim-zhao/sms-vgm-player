@@ -6,9 +6,25 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define Debug
+;.define Debug
 
-.define VGMSTARTPAGE 8 ; 1 for 16KB, 2 for 32KB
+; TODO: remove character classes that are uninteresting to get under 64KB
+.define VGMSTARTPAGE 5 ; 1 for 16KB, 2 for 32KB
+
+; WLA-DX banking setup
+.memorymap
+defaultslot 0
+slotsize $4000
+slot 0 $0000
+slot 1 $4000
+slot 2 $8000
+.endme
+
+.rombankmap
+bankstotal VGMSTARTPAGE
+banksize $4000
+banks VGMSTARTPAGE
+.endro
 
 ; This is sensitive to our font image
 .asciitable
@@ -52,21 +68,6 @@ map "~" = $4d
   .endif
 .endm
 
-; WLA-DX banking setup
-.memorymap
-defaultslot 0
-slotsize $4000
-slot 0 $0000
-slot 1 $4000
-slot 2 $8000
-.endme
-
-.rombankmap
-bankstotal 8
-banksize $4000
-banks 8
-.endro
-
 .bank 0 slot 0
 .org $0000
 
@@ -109,7 +110,6 @@ GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 InitVisDI                       db
-PSGDecoderBuffer                dsb 34
 ZX0Memory dw
 ZX0TempBuffer dsb 1000 ; May be more...
 .ende
@@ -117,20 +117,9 @@ ZX0TempBuffer dsb 1000 ; May be more...
 .bank 0 slot 0
 .org 0
 
-;.include "PhantasyStardecompressors.asm"
-.include "PhantasyStarGaidenDecompressor.asm"
-;.section "LZSA2 decompressor" free
-;.include "unlzsa2_fast.asm"
-;.ends
 .section "ZX0 decompressor" free
 .include "dzx0_fast_sms.asm"
 .ends
-; Uncompressed: 98104
-; LZSA2:        62051
-; LZSA1:        66210
-; ZX7:          63749
-; ZX0:          58461
-; Maybe change later?
 
 .define PAGING_SLOT_0 $fffd
 .define PAGING_SLOT_1 $fffe
@@ -312,17 +301,17 @@ main:
 .function TileVRAMAddressFromIndex(n) $4000+n*32
 
   ; Load tiles
-  ld hl,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
-  ld ix,TileData
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
+  ld hl,TileData
+  call LoadZX0ToVRAM
 
-  ld hl,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
-  ld ix,BigNumbers
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
+  ld hl,BigNumbers
+  call LoadZX0ToVRAM
 
-  ld hl,TileVRAMAddressFromIndex(TileIndex_3DPad)
-  ld ix,Pad
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld hl,Pad
+  call LoadZX0ToVRAM
 
   ; Initial button state values (all off)
   ld a,$ff
@@ -2279,9 +2268,9 @@ InitFrequencyVis:
   call UpdatePalette
   call NormalTilemap
   
-  ld hl,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
-  ld ix,ScaleData
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld hl,ScaleData
+  call LoadZX0ToVRAM
   
   call NoSprites
   call ClearBuffer
@@ -2449,9 +2438,9 @@ InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
 
-  ld hl,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
-  ld ix,ScaleData
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
+  ld hl,ScaleData
+  call LoadZX0ToVRAM
 
   call NoSprites
   call ClearBuffer
@@ -2488,13 +2477,13 @@ InitPianoVis:
     call UpdatePalette
     call NormalTilemap
 
-    ld hl,TileVRAMAddressFromIndex(TileIndex_Piano)
-    ld ix,PianoTiles
-    call PSG_decompress
+    ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
+    ld hl,PianoTiles
+    call LoadZX0ToVRAM
 
-    ld hl,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
-    ld ix,Hands
-    call PSG_decompress
+    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_BigHand)
+    ld hl,Hands
+    call LoadZX0ToVRAM
 
     ld hl,PianoVisString
     ld iy,VisTextLocation
@@ -2932,9 +2921,9 @@ _noHands:
 .section "No vis" free
 InitNoVis:
   call TurnOffScreen
-  ld hl,TileVRAMAddressFromIndex(TileIndex_3DPad)
-  ld ix,Pad
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld hl,Pad
+  call LoadZX0ToVRAM
 
   call UpdatePalette
   call NoSprites
@@ -2969,9 +2958,9 @@ InitSnowVis:
     call UpdatePalette
     call NormalTilemap
 
-    ld hl,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
-    ld ix,Snow
-    call PSG_decompress
+    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
+    ld hl,Snow
+    call LoadZX0ToVRAM
 
     ; Set sprites to 8x8 mode    
     ld a,(VDPRegister81Value)
@@ -3217,14 +3206,14 @@ InitLogoVis:
   call TurnOffScreen
   call NoSprites
   
-  ld hl,TileVRAMAddressFromIndex(TileIndex_Logo)
-  ld ix,LogoTiles
-  call PSG_decompress
+  ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
+  ld hl,LogoTiles
+  call LoadZX0ToVRAM
   
   ; Draw into secondary tilemap at $2800
   ld hl,LogoTileNumbers
   ld de,$4000|$2800
-  call LoadTilemapToVRAM
+  call LoadZX0ToVRAM
 
   ; Switch to it secondary tilemap
   ld hl,$8200 | %11110001 | ($2800 >> 10)
@@ -3644,21 +3633,21 @@ TileIndex_3DPad         dsb 110
 .endm
 
 TileData:
-.incbin "fonts\ZXChicagoPod.tiles.withdupes.psgcompr"
+.incbin "fonts\ZXChicagoPod.tiles.withdupes.zx0"
 
 BigNumbers:
-.incbin "art\big-numbers.tiles.psgcompr"
+.incbin "art\big-numbers.tiles.zx0"
 BigNumbersTilemap:
   TileMapFilteredIncBin("art\big-numbers.tilemap.bin", TileIndex_BigNumbers)
 
 Pad:
-.incbin "art\3d-pad.tiles.psgcompr"
+.incbin "art\3d-pad.tiles.zx0"
 
 PadData:
 .incbin "art\3d-pad.tilemap.zx0"
 
 ScaleData:
-.incbin "art\scale.tiles.psgcompr"
+.incbin "art\scale.tiles.zx0"
 /*
 TextData:
 .asc "   SMS VGM player\n"
@@ -3717,19 +3706,19 @@ NoVGMText:
 .db $ff
 
 PianoTiles:
-.incbin "art\piano.tiles.psgcompr"
+.incbin "art\piano.tiles.zx0"
 
 PianoTileNumbers:
   TileMapFilteredIncBin("art\piano.tilemap.bin", TileIndex_Piano)
 
 Hands:
-.incbin "art\hands.tiles.8x16.psgcompr"
+.incbin "art\hands.tiles.8x16.zx0"
 
 Snow:
-.incbin "art\snow.tiles.8x16.psgcompr"
+.incbin "art\snow.tiles.8x16.zx0"
 
 LogoTiles:
-.incbin "art\screensaver.tiles.psgcompr"
+.incbin "art\screensaver.tiles.zx0"
 
 LogoTileNumbers:
 .incbin "art\screensaver.tilemap.zx0"
@@ -4279,22 +4268,18 @@ HasFMChip:
 .include "fonts/font.asm"
 
 .section "ZX0 art shims" free
-; Decompresses tilemap data from hl to VRAM address de
-LoadTilemapToVRAM:
-  
+LoadZX0ToVRAM:
+  call VRAMToDE
   ; Decompress to RAM
-  push de
-    ld de, ZX0TempBuffer
-    call DecompressZX0
-    ; de points at the end of data
-    ; compute bc = length
-    ld hl, $10000 - ZX0TempBuffer
-    add hl, de
-    ld b, h
-    ld c, l
-  pop hl
+  ld de, ZX0TempBuffer
+  call DecompressZX0
+  ; de points at the end of data
+  ; compute bc = length
+  ld hl, $10000 - ZX0TempBuffer
+  add hl, de
+  ld b, h
+  ld c, l
   ; Then copy to VRAM
-  call VRAMToHL
   ld hl, ZX0TempBuffer
 -:ld a, (hl)
   out ($be), a
