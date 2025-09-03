@@ -30,37 +30,6 @@ def get_font_codepoints(path):
                 yield (y[0], Unicode[y[0]])
 
 
-def convert_ttf(path, fontsize, w, h, voffset, imgwidth):
-    base = os.path.basename(path)
-    fontname = os.path.splitext(base)[0]
-    if not os.path.exists(fontname):
-        os.mkdir(fontname)
-    chars = sorted(set(get_font_codepoints(path)))
-    font = ImageFont.truetype(path, fontsize)
-    font2 = ImageFont.truetype(path, fontsize*10)
-    charsperrow = imgwidth // w
-    imgheight = h * (len(chars) // charsperrow) + (h if len(chars) % charsperrow > 0 else 0)
-    sheet = Image.new('RGB', (imgwidth, imgheight), (0, 0, 0))
-    sheetdraw = ImageDraw.Draw(sheet)
-    x = 0
-    y = voffset
-    for c in chars:
-        if c[1][0] == '?':
-            continue
-        sheetdraw.text((x, y), chr(c[0]), (255, 255, 255), font=font)
-        x += w
-        if x == imgwidth:
-            x = 0
-            y += h
-
-        (cw, ch) = font2.getbbox(chr(c[0]))[2:4]
-        img = Image.new('RGB', (w*10, h*10), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-        draw.text(((w*10 - cw) * 0.5, (h*10 - ch) * 0.5), chr(c[0]), (0, 0, 0), font=font2)
-        img.save('{}/{:d}.{}.png'.format(fontname, c[0], c[1]))
-    sheet.save('{}.png'.format(fontname))
-
-
 class CharacterInfo:
     def __init__(self, codepoint, font, drawing_offset, img_height):
         # Remember the details...
@@ -141,12 +110,14 @@ def convert(args):
             with open(f'{outdir}/chunk{i:02x}.bin', 'wb') as bin:
                 local_chars = buckets[i]
                 # First the lookup
-                offset = 512
+                offset = 256*3
                 for n in range(256):
                     if n in local_chars:
+                        bin.write(struct.pack('B', local_chars[n].img.width))
                         bin.write(struct.pack('<H', offset))
                         offset += local_chars[n].img.width
                     else:
+                        bin.write(struct.pack('B', 0))
                         bin.write(struct.pack('<H', 0))
                 # Then the data
                 for char in local_chars.values():
@@ -166,7 +137,9 @@ def convert(args):
                             sheet.paste(local_chars[index].img, (x, y))
                 sheet.save(f'{outdir}/chunk{i:02x}.png')
             
+        asm.write('.db $ff ; Terminator\n')
         asm.write('.ends\n')
+        asm.write('.slot 2\n')
 
         # Then emit to the asm, expecting compression to happen in the meantime
         for i in buckets:

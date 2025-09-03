@@ -2,13 +2,12 @@
 ; by Maxim
 
 ; VRAM mapping stuff
-.define SpriteSet               1       ; 0 for sprites to use tiles 0-255, 1 for 256+
+.define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-;.define Debug
+.define Debug
 
-; TODO: remove character classes that are uninteresting to get under 64KB
 .define VGMSTARTPAGE 5 ; 1 for 16KB, 2 for 32KB
 
 ; WLA-DX banking setup
@@ -40,6 +39,7 @@ map "~" = $4d
 .enda
 
 .function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32)+$4000
+.function TileVRAMAddressFromIndex(n) $4000+n*32
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
 
 .macro SetDebugColour(r,g,b)
@@ -74,7 +74,7 @@ map "~" = $4d
 ;==============================================================
 ; SDSC tag and SMS rom header
 ;==============================================================
-.sdsctag 2.0,"SMS VGM player",SDSCNotes,"Maxim"
+.sdsctag 2.1,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
 ;    123456789012345678901234567890123456789012345678901234567890123
@@ -110,12 +110,14 @@ GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 InitVisDI                       db
-ZX0Memory dw
-ZX0TempBuffer dsb 1000 ; May be more...
+CurrentChunk                    db ; Chunk number currently loaded
+VWFCurrentTileIndex             db ; Tile index currently being drawn into
+VWFCurrentTileColumn            db ; Column currently being written into
+VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
+ZX0Memory                       dw
+ChunkData                       .db ; overlaps with the following
+ZX0TempBuffer                   dsb 1000 ; May be more...
 .ende
-
-.bank 0 slot 0
-.org 0
 
 .section "ZX0 decompressor" free
 .include "dzx0_fast_sms.asm"
@@ -287,6 +289,8 @@ main:
   ld (FMChipDetected),a
   xor a
   ld (FMChipEnabled),a
+  ld a, $ff
+  ld (CurrentChunk),a ; Assume we never have chunk $ff
 
   ; Startup screen
   call ClearVRAM
@@ -298,52 +302,36 @@ main:
   ld c,0
   call LoadPalette
 
-.function TileVRAMAddressFromIndex(n) $4000+n*32
-
-  ; Load tiles
-  ld de,TileVRAMAddressFromIndex(TileIndex_Font) ; Load font
-  ld hl,TileData
+  ; Draw screen
+  ld de,TileVRAMAddressFromIndex(TileIndex_Background)
+  ld hl,Pad
   call LoadZX0ToVRAM
 
+  ld hl,PadData
+  ld de,TilemapAddress(0, 0)
+  call LoadZX0ToVRAM
+
+  ; Load big number tiles
   ld de,TileVRAMAddressFromIndex(TileIndex_BigNumbers)
   ld hl,BigNumbers
   call LoadZX0ToVRAM
 
-  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
-  ld hl,Pad
+  ; Load small number tiles
+  ld de,TileVRAMAddressFromIndex(TileIndex_SmallNumbers)
+  ld hl,SmallNumbers
   call LoadZX0ToVRAM
+
+  ; Draw text
+  ld hl,TitleText
+  ld de, TilemapAddress(4, 0)
+  ;call DrawTextASCII
 
   ; Initial button state values (all off)
   ld a,$ff
   ld (LastButtonState),a
   ld (ButtonState),a
 
-  ; Draw text
-  ;ld iy,TilemapAddress(0, 0)
-  ;ld hl,TextData
-  ;call WriteASCII
-  
-  ; Fix up colons
-  ld hl,TilemapAddress(6,5)
-  call VRAMToHL
-  ld a,<(TileIndex_BigNumbers+17)
-  out ($be),a
-  ld a,>(TileIndex_BigNumbers+17)
-  out ($be),a
-  ld hl,TilemapAddress(6,6)
-  call VRAMToHL
-  ld a,<(TileIndex_BigNumbers+17)
-  out ($be),a
-  ld a,>(TileIndex_BigNumbers+17)
-  out ($be),a
-
-  ; Draw pad image
-  ld bc,$0c0b     ; 12x11
-  ld hl,PadData
-  ld de,TilemapAddress(19, 1)
-  call DrawImageArea
-
-  ; Put something in the shift register
+  ; Put something in the RNG shift register
   ld a,r
   ld l,a
   ld h,$55
@@ -1090,8 +1078,8 @@ DrawLargeDigit:
       ld h,a
       call _drawTwoTiles ; leaves hl pointing at the last byte used
       
-      ; One row below is 39 bytes after that
-      ld bc,39
+      ; One row below is 37 bytes after that
+      ld bc,37
       add hl,bc
       ; Save that
       ex de,hl
@@ -1312,20 +1300,16 @@ VGMInitialise:
     sbc hl,de
     jr c,+
     inc bc
-+:  ld hl, TilemapAddress(10, 9)
-    call VRAMToHL
++:  ld de, TilemapAddress(10, 9)
+    call VRAMToDE
     ld hl,0
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,ASC(':')   ; Draw colon (faster than redefining name table address)
-    out ($be),a
-    push hl
-    pop hl
-    ld a,0
-    out ($be),a
+    ld de, TilemapAddress(13, 9)
+    call VRAMToDE
     ld a,l
     call Hex2BCD
     call WriteNumber
@@ -1346,19 +1330,13 @@ VGMInitialise:
     ld hl,0
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
-    push hl
-      ld hl, TilemapAddress(10, 10)
-      call VRAMToHL
-    pop hl
+    ld de, TilemapAddress(10, 10)
+    call VRAMToDE
     ld a,c
     call Hex2BCD
     call WriteNumber
-    ld a,ASC(':')  ; Draw colon (faster than redefining name table address)
-    out ($be),a
-    push hl
-    pop hl
-    ld a,0
-    out ($be),a
+    ld de, TilemapAddress(13, 10)
+    call VRAMToDE
     ld a,l
     call Hex2BCD
     call WriteNumber
@@ -2921,7 +2899,7 @@ _noHands:
 .section "No vis" free
 InitNoVis:
   call TurnOffScreen
-  ld de,TileVRAMAddressFromIndex(TileIndex_3DPad)
+  ld de,TileVRAMAddressFromIndex(TileIndex_Background)
   ld hl,Pad
   call LoadZX0ToVRAM
 
@@ -3608,20 +3586,21 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Font          dsb 256
-TileIndex_BigNumbers    dsb 33
-TileIndex_3DPad         dsb 110
-.union
-  TileIndex_Scale         dsb 9   ; 0-8
+TileIndex_Background          dsb 112
+TileIndex_BigNumbers          dsb 32
+TileIndex_SmallNumbers        dsb 10
+.union ; Vis tiles shared area
+  TileIndex_Scale             dsb 9   ; 0-8
 .nextu
-  TileIndex_Piano         dsb 11
-  TileIndex_Sprite_BigHand  dsb 4
+  TileIndex_Piano             dsb 11
+  TileIndex_Sprite_BigHand    dsb 4
   TileIndex_Sprite_SmallHand  dsb 2
 .nextu
-  TileIndex_Logo          dsb 33
+  TileIndex_Logo              dsb 33
 .nextu
-  TileIndex_Sprite_Snow  dsb 4
+  TileIndex_Sprite_Snow       dsb 4
 .endu
+TileIndex_VWF_Start           dsb 100
 .ende
 
 .macro TileMapFilter
@@ -3632,13 +3611,13 @@ TileIndex_3DPad         dsb 110
 .incbin filename filter TileMapFilter filtersize 2
 .endm
 
-TileData:
-.incbin "fonts\ZXChicagoPod.tiles.withdupes.zx0"
-
 BigNumbers:
 .incbin "art\big-numbers.tiles.zx0"
 BigNumbersTilemap:
   TileMapFilteredIncBin("art\big-numbers.tilemap.bin", TileIndex_BigNumbers)
+
+SmallNumbers:
+.incbin "art\small-numbers.tiles.withdupes.zx0"
 
 Pad:
 .incbin "art\3d-pad.tiles.zx0"
@@ -3993,6 +3972,9 @@ VRAMToIY:
     ret
 
 WriteASCII:
+    ; TODO
+    ret
+    /*
     push af
     push bc
     push hl
@@ -4026,37 +4008,9 @@ _done:
     pop bc
     pop af
     ret
+    */
 .ends
-/*
-;==============================================================
-; Image loader (bytes)
-; Parameters:
-; b  = width  (tiles)
-; c  = height (tiles)
-; ix = location of tile number data (bytes)
-; iy = name table address of top-left tile
-;==============================================================
-.section "Draw image" FREE
-DrawImageArea:
---: call VRAMToIY     ; Move to the right place
-    push bc
--:    ld a,(ix+0)
-      inc ix
-      out ($be),a
-      ld a,(ix+0)
-      inc ix
-      out ($be),a
-      djnz -
-    pop bc
-    
-    ld de,64 ; Move name table address
-    add iy,de
 
-    dec c
-    jp nz,--
-    ret
-.ends
-*/
 ;==============================================================
 ; Set VRAM address to hl
 ;==============================================================
@@ -4125,26 +4079,11 @@ WriteNumber:    ; writes hex byte in a to VRAM
     pop bc
     pop af
     ret
-WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
-    push bc
-    push hl
-        ld b,$00
-        ld c,a
-        ld hl,TilemapBaseAddress
-        add hl,bc
-        add hl,bc
-        add hl,bc
-        add hl,bc
-        call WriteNumber
-    pop hl
-    pop bc
-    ret
-
 WriteDigit:     ; writes the digit in a
     cp $0a      ; compare it to A - if it's less then it's 0-9
     jp c,+
-    add a,ASC('A')-ASC('9')+1   ; if it's >9 then make it point at A-F
-+:  add a,ASC('0')
+    add a,'A'-'9'+1   ; if it's >9 then make it point at A-F TODO no longer available
++:  add a,TileIndex_SmallNumbers
 
     out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
     push hl
@@ -4159,6 +4098,22 @@ WriteSpace:
         out ($be),a
         out ($be),a
     pop af
+    ret
+.ends
+.section "Debug number printer" free
+WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
+    push bc
+    push hl
+        ld b,$00
+        ld c,a
+        ld hl,TilemapBaseAddress
+        add hl,bc
+        add hl,bc
+        add hl,bc
+        add hl,bc
+        call WriteNumber
+    pop hl
+    pop bc
     ret
 .ends
 
@@ -4267,6 +4222,7 @@ HasFMChip:
 
 .include "fonts/font.asm"
 
+.bank 0 slot 0
 .section "ZX0 art shims" free
 LoadZX0ToVRAM:
   call VRAMToDE
@@ -4296,36 +4252,109 @@ VRAMToDE:
   ld a, d
   out ($bf), a
   ret
+.ends
 
-DrawImageArea:
-  ; source in hl
-  ; dest in de
-  ; width in b
-  ; height in c
-  push de
-  push bc
-    ld de, ZX0TempBuffer
-    call DecompressZX0
-  pop bc
+.section "VWF font renderer" free
+DrawTextASCII:
+  ; hl = source ASCII
+  ; de = VRAM address of first tile
+  ; Set VRAM address
+  call VRAMToDE
+  ; Draw text by converting to Unicode...
+  ld d, 0
+-:ld a, (hl)
+  or a
+  ret z ; null terminated
+  ld e, a
+  push hl
+    call _DrawUnicodeCharacter
+  pop hl
+  jr -
+
+_DrawUnicodeCharacter:
+  ; TODO: handle whitespace
+  
+  ; character is in de
+  ; First check we have the right chunk loaded
+  call _loadChunk
+  ; Now the data at ChunkData is the lookup based on e
+  ld d, 0
+  ld hl, ChunkData
+  add hl, de ; Point to the e'th character, with 3 bytes per entry
+  add hl, de
+  add hl, de
+  ; Read it in
+  ld a, (hl) ; Width
+  ; Check for zero
+  or a
+  jr z,  _unsupportedCharacter
+  ld b, a
+  inc hl
+  ld a, (hl) ; Offset
+  inc hl
+  ld h, (hl)
+  ld l, a
+  ; That's the offset from ChunkData.
+  ld de, ChunkData
+  add hl, de
+  ; Now we want to draw it twice: once for the shadow and once for the text.
+  ; These might be in different tiles...
+  ; First find our current tile...
+  ret
+
+_unsupportedCharacter:
+  ; Draw a question mark instead
+  ld de, '?'
+  jp _DrawUnicodeCharacter  
+  
+
+_loadChunk:
+  ; Check if we already have it
+  ld a,(CurrentChunk)
+  cp d
+  ret z
+  ; No: try to load it
+  ld hl,Chunks
+  ld bc, 4
+-:; See if it's the one we want
+  ld a,(hl)
+  cp d
+  jr z, _foundIt
+  ; Not a match. Is it the terminator?
+  inc a
+  jr z, _notFound
+  ; Else add 4 bytes and loop
+  add hl, bc
+  jr -
+  
+_notFound:
+  ; Discard return address
   pop de
-  ld hl, ZX0TempBuffer
--:call VRAMToDE
-  push bc
-    ; Emit b*2 bytes
---: ld a, (hl)
-    out ($be), a
+  jp _unsupportedCharacter
+
+_foundIt:
+  ; Page it in
+  ld a,($ffff)
+  push af
     inc hl
-    ld a, (hl)
-    out ($be), a
+    ld a, (hl) ; Bank number
+    ld ($ffff), a
     inc hl
-    djnz --
-    ; Move VRAM address on by 64 bytes
-    ld bc, 64
-    ex de, hl
-    add hl, bc
-    ex de, hl
-  pop bc
-  dec c
-  jp nz, -
-  ret  
+    ld a, (hl) ; Offset
+    inc hl
+    ld h, (hl)
+    ld l, a
+    ; Now decompress
+    ld de, ChunkData
+    call DecompressZX0
+  pop af
+  ld ($ffff),a
+  ; Remember it
+  ld a, d
+  ld (CurrentChunk), a
+  ret
+  
+TitleText:
+.db "SMS VGM Player"
+  
 .ends

@@ -12,7 +12,7 @@ default: smsvgmplayer.stub
 
 # WLA DX will tell us what files we need
 # Problem: it can't tell us about files needed by generated asm...
-auto.makefile: smsvgmplayer.stub.asm
+auto.makefile: smsvgmplayer.stub.asm fonts/font.asm
 	$(WLAZ80) -M -t -o smsvgmplayer.stub.o smsvgmplayer.stub.asm > $@
 
 -include auto.makefile
@@ -21,10 +21,10 @@ art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
 art/screensaver.tilemap.zx0: art/screensaver.png
-	$(BMP2TILE) $< -tileoffset 399 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 154 -savetilemap $@
 
 art/3d-pad.tilemap.zx0: art/3d-pad.png
-	$(BMP2TILE) $< -tileoffset 289 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 0 -savetilemap $@
 
 %.tiles.psgcompr: %.png
 	$(BMP2TILE) $< -savetiles $@
@@ -69,12 +69,11 @@ smsvgmplayer.stub: smsvgmplayer.stub.o
 	copy /y smsvgmplayer.sym $@.sym
 
 clean:
-	del art\*.pscompr
-	del art\*.psgcompr
+	del art\*.zx0
 	del art\*.bin
 	del art\*.palette
 	del smsvgmplayer.stub
 	del smsvgmplayer.stub.o
 	del auto.makefile
-	del fonts\*.bin*
+	del fonts\chunk*
 	del fonts\font.asm
