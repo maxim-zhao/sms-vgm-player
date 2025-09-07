@@ -54,9 +54,8 @@ fonts/%.bin: fonts/font.asm
 
 fonts/font.asm: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
 	python fonts/fontdump.py \
-	-size=8 -offset=-1 fonts/ZX_Chicago.ttf \
+	-size=8 -offset=0 fonts/MxPlus_Amstrad_PC.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
-	-size=9 -offset=-2 fonts/Tahoma.ttf \
 	-outdir=fonts -skip=ff,26,25,24,22,21,20,4,3
 
 # And then we build it

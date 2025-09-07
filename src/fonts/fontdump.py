@@ -34,14 +34,17 @@ class CharacterInfo:
     def __init__(self, codepoint, font, drawing_offset, img_height):
         # Remember the details...
         self.codepoint = codepoint
-        width = font.getbbox(chr(codepoint))[2]
+        # We add 4px padding because the font may draw outside its reported box
+        width = font.getbbox(chr(codepoint))[2] + 8
         # Now draw the font to an image
         self.img = Image.new('1', (width, img_height), 0)
         imgdraw = ImageDraw.Draw(self.img)
-        imgdraw.text((0, drawing_offset), chr(codepoint), fill=1, font=font)
+        imgdraw.text((4, drawing_offset), chr(codepoint), fill=1, font=font)
         bbox = self.img.getbbox()
         if bbox:
             self.img = self.img.crop((bbox[0], 0, bbox[2], 8))
+    # TODO: try drawing at a smaller height if it's too tall,
+    # or offset if it's out of bounds?
 
 
 def convert(args):

@@ -116,6 +116,7 @@ VWFRemainingColumns             db ; Number of columns left to draw
 VWFCurrentTileBufferPosition    dw ; Pointer to current column
 VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right
+VWFTilemapAddress               dw
 ZX0Memory                       dw
 ChunkData                       .db ; overlaps with the following
 ZX0TempBuffer                   dsb 1000 ; May be more...
@@ -334,12 +335,28 @@ main:
   ldir
   
   ld hl,TitleText
-  ld de, TilemapAddress(4, 0)
+  ld de, TilemapAddress(2, 1)
   call DrawTextASCII
-  
-  ld hl, UnicodeText
-  ld de, TilemapAddress(4, 0)
-  call DrawTextUnicode
+
+  ld hl,TitleText2
+  ld de, TilemapAddress(6, 2)
+  call DrawTextASCII
+
+  ld hl,TimeText
+  ld de, TilemapAddress(2, 4)
+  call DrawTextASCII
+
+  ld hl,LoopText
+  ld de, TilemapAddress(13, 4)
+  call DrawTextASCII
+
+  ld hl,TotalText
+  ld de, TilemapAddress(2, 9)
+  call DrawTextASCII
+
+  ld hl,LoopText
+  ld de, TilemapAddress(2, 10)
+  call DrawTextASCII
 
   ; Initial button state values (all off)
   ld a,$ff
@@ -406,6 +423,19 @@ InfiniteLoop:   ; to stop the program
   SetDebugColour(0,0,0)
 
   jr InfiniteLoop
+
+.section "Text" free
+TitleText:
+.db "SMS VGM Player v2.1", 0
+TitleText2:
+.db "by Maxim", 0
+TimeText:
+.db "Time", 0
+LoopText:
+.db "Loop", 0
+TotalText:
+.db "Total", 0
+.ends
 
 ;==============================================================
 ; VGM offset to SMS offset convertor
@@ -557,10 +587,17 @@ DrawGD3Tag:
       ld a,12
       call MoveHLForwardByA
       
+      ld a, $ff
+      ld (CurrentChunk),a ; Assume we never have chunk $ff
+
       ; We prefer the English or Japanese according to the system region
+      ld de, TilemapAddress(1, 18)
       call _DrawGd3StringForRegion ; Title
+      ld de, TilemapAddress(1, 19)
       call _DrawGd3StringForRegion ; Game
+      ld de, TilemapAddress(1, 20)
       call _DrawGd3StringForRegion ; System
+      ld de, TilemapAddress(1, 21)
       call _DrawGd3StringForRegion ; Author
     pop af
     ld (PAGING_SLOT_2),a
@@ -639,372 +676,12 @@ _SkipGD3String:
   ret
 
 _DrawGD3String:
-; Copy string from hl to RAM, (badly) converting from Unicode as I go
-; Copy a maximum of MaxLength chars, terminate with \n\0
-; Then draw to the screen
-.define MaxLength 31                ; GD3 line length
-  push af
-  push de
-  push bc
-    ld de,GD3DisplayerBuffer    ; Where to store ASCII
-    ld a,MaxLength
--:  ; Get value into bc. GD3 uses UTF-16.
-    ld c,(hl)
-    call MoveHLForward
-    ld b,(hl)
-    call MoveHLForward
-    push af ; backup char counter
-      ld a,b
-      or c
-      jr z,_done
-      ; Map character from UTF-16 to our font
-      call _MapToFont
-      ld (de),a
-    pop af
-    inc de
-    dec a   ; decrement counter
-    jr nz,-
-    ; If it gets to zero:
-    call _SkipGD3String   ; go to the end of the string
-    jr +
-    ; fall through to finish
-
-_done:
-    pop af
-+:  push hl ; hl is returned
-      ex de,hl
-      cp 32           ; If no chars were written
-      jr nz,+
-      ld (hl),' ' ; put a space so it'll work properly
-      inc hl
-+:    ld (hl),ASC('\n')
-      inc hl
-      ld (hl),ASC(0)
-      ld hl,GD3DisplayerBuffer
-      call WriteASCII
-    pop hl
-  pop bc
-  pop de
-  pop af
-  ret
-
-_MapToFont:
-  ; bc = UTF-16 word
-  ; Return a = character
-  ; Our font is in Unicode order but is not a full set. We therefore apply some offsetting.
-  push hl
-  push de
-    ; fullwidth is in the range $ff00+
-    ; We want to convert it to normal width in the range $0020+
-    ; mapping to bc-$ff00+$20 = bc+$120
-    ld a,b
-    cp $ff
-    jr nz,+
-; Halfwidth is there too, do we need to support it? Maybe, if it is easy?
-    ld hl,$0120
-    add hl,bc
-    ld b,h
-    ld c,l
-  
-+:  ld hl,_lookupData+3 ; No need to start at 0, we backtrack to it if needed
-    ld d,_sizeof__lookupData / 3
--:  ; Read word from table
-    ld a,(hl)
-    inc hl
-    push hl
-      ld h,(hl)
-      ld l,a
-      ; Add to bc, we will get carry if -hl>bc
-      add hl,bc
-      jr nc,+
-      ; Carry means -hl wasn't big enough yet
-    pop hl
-    inc hl
-    inc hl
-    dec d
-    ; We ran out of table
-    jr nz,-
---: ld a,ASC('?') ; no match found
--:pop de
-  pop hl
-  ret
-
-+:  pop hl
-    ; If we get a carry then we want the previous entry's data. We are pointing at byte 2 of the following entry...
-    dec hl
-    dec hl
-    ld a,(hl) ; byte offset
-    cp -1
-    jr z,-- ; -1 means unhandled range
-    dec hl
-    ld e,(hl)
-    dec hl
-    ld l,(hl)
-    ld h,e
-    add hl,bc
-    add l
-    ; now a = what we wanted
-    jr -
-
-; UTF-16 and index to use
-_lookupData:
-.table dw, db
-; For each range of 16-bit Unicode, subtract the word and add the byte to get a tile index.
-; If the byte is -1, it's an invalid char.
-;  !"&'()+,-./0123456789:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz~、いうきくさしすたでとのぷやょよるんァアィイウェエォオカガキギクグケゲコゴサザシジスズセソゾタダチッテデトドナニハバパヒビピフブプヘベペホボポマミムメモャュョラリルレロワンヴ・三上中之二井仁代伝佳保優元克内出剣千博口古史司和圭坂基塚士外大子宮小尾山岩島崎川幸康彦徳忍志忠慎戦早昌朗木本村林橋武河沼法洋王生田知祐福秘穂竹織考草藤行説谷通進郎野鎌長陽雀雄魔
-.row $0000, -1
-.row $ffe0, $00 ; " !""
-.row $ffdd, -1
-.row $ffda, $03 ; "&'()"
-.row $ffd6, -1
-.row $ffd5, $07 ; "+,-./0123456789:;"
-.row $ffc4, -1
-.row $ffc1, $18 ; "?"
-.row $ffc0, -1
-.row $ffbf, $19 ; "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-.row $ffa5, -1
-.row $ff9f, $33 ; "abcdefghijklmnopqrstuvwxyz"
-.row $ff85, -1
-.row $ff82, $4d ; "~"
-.row $ff81, -1
-.row $ff4e, $0e ; "²³"
-.row $ff4c, -1
-.row $ff49, $a5 ; "·"
-.row $ff48, -1
-.row $ff1f, $33 ; "á"
-.row $ff1e, -1
-.row $ff17, $37 ; "é"
-.row $ff16, -1
-.row $cfff, $4e ; "、"
-.row $cffe, -1
-.row $cfbc, $4f ; "い"
-.row $cfbb, -1
-.row $cfba, $50 ; "う"
-.row $cfb9, -1
-.row $cfb3, $51 ; "き"
-.row $cfb2, -1
-.row $cfb1, $52 ; "く"
-.row $cfb0, -1
-.row $cfab, $53 ; "さ"
-.row $cfaa, -1
-.row $cfa9, $54 ; "し"
-.row $cfa8, -1
-.row $cfa7, $55 ; "す"
-.row $cfa6, -1
-.row $cfa1, $56 ; "た"
-.row $cfa0, -1
-.row $cf99, $57 ; "でと"
-.row $cf97, -1
-.row $cf92, $59 ; "の"
-.row $cf91, -1
-.row $cf89, $5a ; "ぷ"
-.row $cf88, -1
-.row $cf7c, $5b ; "や"
-.row $cf7b, -1
-.row $cf79, $5c ; "ょよ"
-.row $cf77, -1
-.row $cf75, $5e ; "る"
-.row $cf74, -1
-.row $cf6d, $5f ; "ん"
-.row $cf6c, -1
-.row $cf5f, $60 ; "ァアィイ"
-.row $cf5b, -1
-.row $cf5a, $64 ; "ウェエォオカガキギクグケゲコゴサザシジスズセ"
-.row $cf44, -1
-.row $cf43, $7a ; "ソゾタダチ"
-.row $cf3e, -1
-.row $cf3d, $7f ; "ッ"
-.row $cf3c, -1
-.row $cf3a, $80 ; "テデトドナニ"
-.row $cf34, -1
-.row $cf31, $86 ; "ハバパヒビピフブプヘベペホボポマミムメモャ"
-.row $cf1c, -1
-.row $cf1b, $9b ; "ュ"
-.row $cf1a, -1
-.row $cf19, $9c ; "ョ"
-.row $cf18, -1
-.row $cf17, $9d ; "ラリルレロ"
-.row $cf12, -1
-.row $cf11, $a2 ; "ワ"
-.row $cf10, -1
-.row $cf0d, $a3 ; "ンヴ"
-.row $cf0b, -1
-.row $cf05, $a5 ; "・ー"
-.row $cf03, -1
-.row $b200, $09 ; "一"
-.row $b1ff, -1
-.row $b1f7, $a6 ; "三上"
-.row $b1f5, -1
-.row $b1d3, $a8 ; "中"
-.row $b1d2, -1
-.row $b1b5, $a9 ; "之"
-.row $b1b4, -1
-.row $b174, $aa ; "二"
-.row $b173, -1
-.row $b16b, $ab ; "井"
-.row $b16a, -1
-.row $b13f, $ac ; "仁"
-.row $b13e, -1
-.row $b11d, $ad ; "代"
-.row $b11c, -1
-.row $b0e3, $ae ; "伝"
-.row $b0e2, -1
-.row $b08d, $af ; "佳"
-.row $b08c, -1
-.row $b023, $b0 ; "保"
-.row $b022, -1
-.row $aed6, $b1 ; "優"
-.row $aed5, -1
-.row $aebd, $b2 ; "元"
-.row $aebc, -1
-.row $aeb5, $b3 ; "克"
-.row $aeb4, -1
-.row $ae7b, $b4 ; "内"
-.row $ae7a, -1
-.row $ae06, $b5 ; "出"
-.row $ae05, -1
-.row $ad9d, $b6 ; "剣"
-.row $ad9c, -1
-.row $acbd, $b7 ; "千"
-.row $acbc, -1
-.row $aca6, $b8 ; "博"
-.row $aca5, -1
-.row $ac1d, $b9 ; "口古"
-.row $ac1b, -1
-.row $ac0e, $bb ; "史"
-.row $ac0d, -1
-.row $ac08, $bc ; "司"
-.row $ac07, -1
-.row $ab74, $bd ; "和"
-.row $ab73, -1
-.row $a8d3, $be ; "圭"
-.row $a8d2, -1
-.row $a8be, $bf ; "坂"
-.row $a8bd, -1
-.row $a806, $c0 ; "基"
-.row $a805, -1
-.row $a7a6, $c1 ; "塚"
-.row $a7a5, -1
-.row $a715, $c2 ; "士"
-.row $a714, -1
-.row $a6ea, $c3 ; "外"
-.row $a6e9, -1
-.row $a6d9, $c4 ; "大"
-.row $a6d8, -1
-.row $a4b0, $c5 ; "子"
-.row $a4af, -1
-.row $a452, $c6 ; "宮"
-.row $a451, -1
-.row $a3f1, $c7 ; "小"
-.row $a3f0, -1
-.row $a3c2, $c8 ; "尾"
-.row $a3c1, -1
-.row $a38f, $c9 ; "山"
-.row $a38e, -1
-.row $a357, $ca ; "岩"
-.row $a356, -1
-.row $a30a, $cb ; "島"
-.row $a309, -1
-.row $a2f2, $cc ; "崎"
-.row $a2f1, -1
-.row $a223, $cd ; "川"
-.row $a222, -1
-.row $a188, $ce ; "幸"
-.row $a187, -1
-.row $a149, $cf ; "康"
-.row $a148, -1
-.row $a09a, $d0 ; "彦"
-.row $a099, -1
-.row $a04d, $d1 ; "徳"
-.row $a04c, -1
-.row $a033, $d2 ; "忍"
-.row $a032, -1
-.row $a029, $d3 ; "志"
-.row $a028, -1
-.row $a020, $d4 ; "忠"
-.row $a01f, -1
-.row $9eb2, $d5 ; "慎"
-.row $9eb1, -1
-.row $9dda, $d6 ; "戦"
-.row $9dd9, -1
-.row $9a17, $d7 ; "早"
-.row $9a16, -1
-.row $99f4, $d8 ; "昌"
-.row $99f3, -1
-.row $98e9, $d9 ; "朗"
-.row $98e8, -1
-.row $98d8, $da ; "木"
-.row $98d7, -1
-.row $98d4, $db ; "本"
-.row $98d3, -1
-.row $98af, $dc ; "村"
-.row $98ae, -1
-.row $9869, $dd ; "林"
-.row $9868, -1
-.row $95b5, $de ; "橋"
-.row $95b4, -1
-.row $949a, $df ; "武"
-.row $9499, -1
-.row $934d, $e0 ; "河"
-.row $934c, -1
-.row $9344, $e1 ; "沼"
-.row $9343, -1
-.row $932b, $e2 ; "法"
-.row $932a, -1
-.row $92f5, $e3 ; "洋"
-.row $92f4, -1
-.row $8c75, $e4 ; "王"
-.row $8c74, -1
-.row $8ae1, $e5 ; "生"
-.row $8ae0, -1
-.row $8ad0, $e6 ; "田"
-.row $8acf, -1
-.row $881b, $e7 ; "知"
-.row $881a, -1
-.row $86b0, $e8 ; "祐"
-.row $86af, -1
-.row $8671, $e9 ; "福"
-.row $8670, -1
-.row $8628, $ea ; "秘"
-.row $8627, -1
-.row $85be, $eb ; "穂"
-.row $85bd, -1
-.row $8507, $ec ; "竹"
-.row $8506, -1
-.row $81ac, $ed ; "織"
-.row $81ab, -1
-.row $7ffd, $ee ; "考"
-.row $7ffc, -1
-.row $7cb7, $ef ; "草"
-.row $7cb6, -1
-.row $7a1c, $f0 ; "藤"
-.row $7a1b, -1
-.row $77b4, $f1 ; "行"
-.row $77b3, -1
-.row $7554, $f2 ; "説"
-.row $7553, -1
-.row $73c9, $f3 ; "谷"
-.row $73c8, -1
-.row $6fe6, $f4 ; "通"
-.row $6fe5, -1
-.row $6fce, $f5 ; "進"
-.row $6fcd, -1
-.row $6f32, $f6 ; "郎"
-.row $6f31, -1
-.row $6e32, $f7 ; "野"
-.row $6e31, -1
-.row $6c74, $f8 ; "鎌"
-.row $6c73, -1
-.row $6a89, $f9 ; "長"
-.row $6a88, -1
-.row $6983, $fa ; "陽"
-.row $6982, -1
-.row $6940, $fb ; "雀"
-.row $693f, -1
-.row $693c, $fc ; "雄"
-.row $693b, -1
-.row $64ac, $fd ; "魔"
-.endt
+  ; TODO:
+  ; 1. Limit to screen width - max tile count
+  ; 2. Buffer from ROM (potentially across a page boundary) to RAM?
+  ;    Or have the called function call back here?
+  ; Also need to move all other tiles to above 256!
+  jp DrawTextUnicode
 .ends
 
 ;==============================================================
@@ -1017,7 +694,7 @@ ShowTime:
   ; get digits
   ld de,(VGMTimeMins)     ; d = sec  e = min
   ; Set start name table address
-  ld hl, TilemapAddress(2, 5)
+  ld hl, TilemapAddress(2, 6)
   ; Output digit(s)
   ld b,e
   call DrawByte
@@ -1041,7 +718,7 @@ ShowLoopNumber:
     push hl
       ld a,(VGMLoopsPlayed)
       ld b,a
-      ld hl, TilemapAddress(13, 5)
+      ld hl, TilemapAddress(13, 6)
       call DrawByte
       xor a
       ld (LoopsChanged),a
@@ -3987,43 +3664,8 @@ VRAMToIY:
     ret
 
 WriteASCII:
-    ; TODO
+    ; TODO?
     ret
-    /*
-    push af
-    push bc
-    push hl
-      call VRAMToIY
--:    ld a,(hl)    ; Value to write
-      inc hl
-      cp $ff ; EOT
-      jr z,_done
-      cp $fe ; Newline
-      jp z,_NewLine
-      out ($BE),a    ; Output to VRAM address, which is auto-incremented after each write
-      ld a,0
-      push hl
-      pop hl  ; delay
-      out ($BE),a
-      jp -
-_NewLine:
-      ; Go to the next line, ie. next multiple of 32=$20
-      push hl
-        push iy
-        pop hl
-        ld bc,64
-        add hl,bc
-        call VRAMToHL
-        push hl
-        pop iy
-      pop hl
-      jp -
-_done:
-    pop hl
-    pop bc
-    pop af
-    ret
-    */
 .ends
 
 ;==============================================================
@@ -4273,8 +3915,8 @@ VRAMToDE:
 DrawTextUnicode:
   ; hl = source 16-bit
   ; de = VRAM address of first tile
-  ; Set VRAM address
-  call VRAMToDE
+  ; First save the tilemap address
+  ld (VWFTilemapAddress), de
 -:ld e, (hl)
   inc hl
   push hl
@@ -4288,13 +3930,14 @@ DrawTextUnicode:
   jr -
 +: ; End of string
   pop hl
+  inc hl
   jr +
 
 DrawTextASCII:
   ; hl = source ASCII
   ; de = VRAM address of first tile
-  ; Set VRAM address
-  call VRAMToDE
+  ; First save the tilemap address
+  ld (VWFTilemapAddress), de
   ; Draw text by converting to Unicode...
 -:ld a, (hl)
   or a
@@ -4312,6 +3955,7 @@ DrawTextASCII:
   ; And set the state so the next call will start in a new tile
   xor a
   ld (VWFCurrentTileIndex), a
+  ld (VWFRemainingColumns), a
   ret
 
 _unsupportedCharacter:
@@ -4386,10 +4030,6 @@ _drawColumnWithShadow:
   pop bc
   ret
   
-_tileBufferIsFull:
-  call _flushTileToVRAM
-  call _getNextAvailableTile
-  
 _drawColumn:
   push af
     ; For each pixel...
@@ -4437,68 +4077,80 @@ _getNextAvailableTile:
   ret
   
 _flushTileToVRAM:
-  ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
-  ; top to bottom, one byte per pixel. We need to convert
-  ; to planar form: left to right, one bitplane per byte.
-  ; First get the tile address to write to...
-  ld a, (VWFCurrentTileIndex)
-  ; VRAM address is $4000 + 32 * a
-  ; Might be a better way than this?
-  ld l, a
-  ld h, 0
-  add hl, hl
-  add hl, hl
-  add hl, hl
-  add hl, hl
-  add hl, hl
-  set 6, h
-  call VRAMToHL
-  
-  ld b, 8 ; Rows
-  ld hl, VWFTileBuffer
+  push hl
+    ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
+    ; top to bottom, one byte per pixel. We need to convert
+    ; to planar form: left to right, one bitplane per byte.
+    ; First get the tile address to write to...
+    ld a, (VWFCurrentTileIndex)
+    ; VRAM address is $4000 + 32 * a
+    ; Might be a better way than this?
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    set 6, h
+    call VRAMToHL
+    
+    ld b, 8 ; Rows
+    ld hl, VWFTileBuffer
 
 _row_loop:
-  push bc
-  push hl
-    ; For the current row, we will generate all 4 bitplane bytes.
-
-    ld b, 4 ; Bitplanes
-    ld c, %0001 ; Bitmask for bitplane 0
-
-_bitplane_loop:
     push bc
     push hl
-      ld e, 0 ; Accumulator
-      ld b, 8 ; Number of bits to accumulate
+      ; For the current row, we will generate all 4 bitplane bytes.
 
--:    sla e
-      ld a, (hl)  ; Get pixel nibble
-      and c       ; Mask to bit of interest
-      jr z, +     ; Skip if 0
-      inc e       ; Else set LSB
-+:    ; hl += 8
-      push de
-        ld d, 0
-        ld e, 8
-        add hl, de
-      pop de
+      ld b, 4 ; Bitplanes
+      ld c, %0001 ; Bitmask for bitplane 0
 
-      djnz -
+_bitplane_loop:
+      push bc
+      push hl
+        ld e, 0 ; Accumulator
+        ld b, 8 ; Number of bits to accumulate
 
-      ; We have a byte, so we can emit it
-      ld a, e
-      out ($be), a
+-:      sla e
+        ld a, (hl)  ; Get pixel nibble
+        and c       ; Mask to bit of interest
+        jr z, +     ; Skip if 0
+        inc e       ; Else set LSB
++:      ; hl += 8
+        push de
+          ld d, 0
+          ld e, 8
+          add hl, de
+        pop de
+
+        djnz -
+
+        ; We have a byte, so we can emit it
+        ld a, e
+        out ($be), a
+
+      pop hl
+      pop bc
+      sla c ; Shift bitmask left
+      djnz _bitplane_loop ; repeat for 4 bitplanes
 
     pop hl
     pop bc
-    sla c ; Shift bitmask left
-    djnz _bitplane_loop ; repeat for 4 bitplanes
-
+    inc hl ; New start byte is +1 from the start
+    djnz _row_loop          ; Loop until all 8 rows are done
+  
+    ; Finally, write to the tilemap
+    ld de, (VWFTilemapAddress)
+    call VRAMToDE
+    inc de
+    inc de
+    ld (VWFTilemapAddress), de
+    ld a, (VWFCurrentTileIndex)
+    out ($be), a
+    xor a
+    out ($be), a
   pop hl
-  pop bc
-  inc hl ; New start byte is +1 from the start
-  djnz _row_loop          ; Loop until all 8 rows are done
-
   ret
 
 _loadChunk:
@@ -4548,14 +4200,5 @@ _foundIt:
   ld a, d
   ld (CurrentChunk), a
   ret
-  
-TitleText:
-.db "SMS VGM Player VWF font test. This seems to be working...", 0
-
-UnicodeText:
-.dw $3053 $3093 $306B $3061 $306F $4E16 $754C 
-.dw 32
-.dw $004F $006C $00E1 $002C $0020 $006D $0075 $006E $0064 $006F $0021
-.dw 0
   
 .ends
