@@ -8,7 +8,7 @@
 
 .define Debug
 
-.define VGMSTARTPAGE 5 ; 1 for 16KB, 2 for 32KB
+.define VGMSTARTPAGE 6 ; 1 for 16KB, 2 for 32KB
 
 ; WLA-DX banking setup
 .memorymap
@@ -112,8 +112,10 @@ VDPRegister81Value              db
 InitVisDI                       db
 CurrentChunk                    db ; Chunk number currently loaded
 VWFCurrentTileIndex             db ; Tile index currently being drawn into
-VWFCurrentTileColumn            db ; Column currently being written into
+VWFRemainingColumns             db ; Number of columns left to draw
+VWFCurrentTileBufferPosition    dw ; Pointer to current column
 VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
+VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right
 ZX0Memory                       dw
 ChunkData                       .db ; overlaps with the following
 ZX0TempBuffer                   dsb 1000 ; May be more...
@@ -321,10 +323,23 @@ main:
   ld hl,SmallNumbers
   call LoadZX0ToVRAM
 
-  ; Draw text
+  ; Init VWF
+  ld a, TileIndex_VWF_Start
+  ld (VWFNextUnusedTile), a
+  ld a, 4
+  ld hl, VWFTileBuffer
+  ld de, VWFTileBuffer+1
+  ld bc, _sizeof_VWFTileBuffer-1
+  ld (hl), a
+  ldir
+  
   ld hl,TitleText
   ld de, TilemapAddress(4, 0)
-  ;call DrawTextASCII
+  call DrawTextASCII
+  
+  ld hl, UnicodeText
+  ld de, TilemapAddress(4, 0)
+  call DrawTextUnicode
 
   ; Initial button state values (all off)
   ld a,$ff
@@ -3592,7 +3607,7 @@ TileIndex_SmallNumbers        dsb 10
 .union ; Vis tiles shared area
   TileIndex_Scale             dsb 9   ; 0-8
 .nextu
-  TileIndex_Piano             dsb 11
+  TileIndex_Piano             dsb 11+1 ; To make the sprites at an even index
   TileIndex_Sprite_BigHand    dsb 4
   TileIndex_Sprite_SmallHand  dsb 2
 .nextu
@@ -4255,25 +4270,56 @@ VRAMToDE:
 .ends
 
 .section "VWF font renderer" free
+DrawTextUnicode:
+  ; hl = source 16-bit
+  ; de = VRAM address of first tile
+  ; Set VRAM address
+  call VRAMToDE
+-:ld e, (hl)
+  inc hl
+  push hl
+    ld d, (hl)
+    ld a, d
+    or e
+    jr z, + ; null terminated
+    call _DrawUnicodeCharacter
+  pop hl
+  inc hl
+  jr -
++: ; End of string
+  pop hl
+  jr +
+
 DrawTextASCII:
   ; hl = source ASCII
   ; de = VRAM address of first tile
   ; Set VRAM address
   call VRAMToDE
   ; Draw text by converting to Unicode...
-  ld d, 0
 -:ld a, (hl)
   or a
-  ret z ; null terminated
+  jr z, + ; null terminated
   ld e, a
+  ld d, 0
   push hl
     call _DrawUnicodeCharacter
   pop hl
+  inc hl
   jr -
++: ; End of string
+  ; Finish drawing it
+  call _flushTileToVRAM
+  ; And set the state so the next call will start in a new tile
+  xor a
+  ld (VWFCurrentTileIndex), a
+  ret
 
-_DrawUnicodeCharacter:
-  ; TODO: handle whitespace
+_unsupportedCharacter:
+  ; Draw a question mark instead
+  ld de, '?'
+  ; fall through
   
+_DrawUnicodeCharacter:
   ; character is in de
   ; First check we have the right chunk loaded
   call _loadChunk
@@ -4288,7 +4334,7 @@ _DrawUnicodeCharacter:
   ; Check for zero
   or a
   jr z,  _unsupportedCharacter
-  ld b, a
+  ld b, a ; b = number of columns to draw
   inc hl
   ld a, (hl) ; Offset
   inc hl
@@ -4297,16 +4343,163 @@ _DrawUnicodeCharacter:
   ; That's the offset from ChunkData.
   ld de, ChunkData
   add hl, de
-  ; Now we want to draw it twice: once for the shadow and once for the text.
-  ; These might be in different tiles...
-  ; First find our current tile...
-  ret
+  ex de, hl
+  ; Now de points at the first column of 1-bit pixel data.
 
-_unsupportedCharacter:
-  ; Draw a question mark instead
-  ld de, '?'
-  jp _DrawUnicodeCharacter  
+-:ld a, (de)
+  call _drawColumnWithShadow
+  inc de
+  djnz -
+  ; And one blank
+  xor a
+  ; fall through
+
+_drawColumnWithShadow:
+  push bc
+  push de
+    push af
+      ; Now we want to draw it twice: once for the shadow and once for the text.
+      ; These might be in different tiles...
+      ; First find our current tile...
+      ld a, (VWFRemainingColumns)
+      or a
+      call z, _getNextAvailableTile
+    pop af
+    ; Point hl at the drawing location
+    ld hl, (VWFCurrentTileBufferPosition)
+    ; Now we want to take the bitmask at (hl) and draw it with colour 3 (white)
+    ld c, 3
+    call _drawColumn
+    ; And then offset by 1 and draw again with colour 0 (black)
+    srl a
+    ld c, 0
+    call _drawColumn
+    ; Save the position
+    ld bc, -8 ; First subtract 8 bytes to get back to the previous column
+    add hl, bc
+    ld (VWFCurrentTileBufferPosition), hl
+    ; And decrement the counter
+    inc de
+    ld hl, VWFRemainingColumns
+    dec (hl)
+  pop de
+  pop bc
+  ret
   
+_tileBufferIsFull:
+  call _flushTileToVRAM
+  call _getNextAvailableTile
+  
+_drawColumn:
+  push af
+    ; For each pixel...
+    ld b, 8
+-:  ; Shift left out of a
+    add a, a
+    ; If no carry, no draw
+    jr nc, +
+    ; Else draw c to (hl)
+    ld (hl), c
++:  inc hl ; Next destination pixel
+    djnz -
+  pop af
+  ret
+  
+_getNextAvailableTile:
+  push de
+    ; If we have finished a tile, flush it to VRAM
+    ld a, (VWFCurrentTileIndex)
+    or a
+    call nz, _flushTileToVRAM
+    ; Assign the next index
+    ld hl, VWFNextUnusedTile
+    ld a, (hl)
+    ld (VWFCurrentTileIndex), a
+    inc (hl)
+    ; Copy the last 8 bytes to the start
+    ld hl, VWFTileBuffer+64
+    ld de, VWFTileBuffer
+    ld bc, 8
+    ldir
+    ; Blank the rest to colour 4
+    ld hl, VWFTileBuffer+8
+    ld de, VWFTileBuffer+9
+    ld bc, _sizeof_VWFTileBuffer - 8 - 1
+    ld (hl), 4 ; Background colour
+    ldir
+    ; Point to it
+    ld hl, VWFTileBuffer
+    ld (VWFCurrentTileBufferPosition), hl
+    ; And set the counter
+    ld a, 8
+    ld (VWFRemainingColumns), a
+  pop de
+  ret
+  
+_flushTileToVRAM:
+  ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
+  ; top to bottom, one byte per pixel. We need to convert
+  ; to planar form: left to right, one bitplane per byte.
+  ; First get the tile address to write to...
+  ld a, (VWFCurrentTileIndex)
+  ; VRAM address is $4000 + 32 * a
+  ; Might be a better way than this?
+  ld l, a
+  ld h, 0
+  add hl, hl
+  add hl, hl
+  add hl, hl
+  add hl, hl
+  add hl, hl
+  set 6, h
+  call VRAMToHL
+  
+  ld b, 8 ; Rows
+  ld hl, VWFTileBuffer
+
+_row_loop:
+  push bc
+  push hl
+    ; For the current row, we will generate all 4 bitplane bytes.
+
+    ld b, 4 ; Bitplanes
+    ld c, %0001 ; Bitmask for bitplane 0
+
+_bitplane_loop:
+    push bc
+    push hl
+      ld e, 0 ; Accumulator
+      ld b, 8 ; Number of bits to accumulate
+
+-:    sla e
+      ld a, (hl)  ; Get pixel nibble
+      and c       ; Mask to bit of interest
+      jr z, +     ; Skip if 0
+      inc e       ; Else set LSB
++:    ; hl += 8
+      push de
+        ld d, 0
+        ld e, 8
+        add hl, de
+      pop de
+
+      djnz -
+
+      ; We have a byte, so we can emit it
+      ld a, e
+      out ($be), a
+
+    pop hl
+    pop bc
+    sla c ; Shift bitmask left
+    djnz _bitplane_loop ; repeat for 4 bitplanes
+
+  pop hl
+  pop bc
+  inc hl ; New start byte is +1 from the start
+  djnz _row_loop          ; Loop until all 8 rows are done
+
+  ret
 
 _loadChunk:
   ; Check if we already have it
@@ -4345,8 +4538,10 @@ _foundIt:
     ld h, (hl)
     ld l, a
     ; Now decompress
-    ld de, ChunkData
-    call DecompressZX0
+    push de
+      ld de, ChunkData
+      call DecompressZX0
+    pop de
   pop af
   ld ($ffff),a
   ; Remember it
@@ -4355,6 +4550,12 @@ _foundIt:
   ret
   
 TitleText:
-.db "SMS VGM Player"
+.db "SMS VGM Player VWF font test. This seems to be working...", 0
+
+UnicodeText:
+.dw $3053 $3093 $306B $3061 $306F $4E16 $754C 
+.dw 32
+.dw $004F $006C $00E1 $002C $0020 $006D $0075 $006E $0064 $006F $0021
+.dw 0
   
 .ends

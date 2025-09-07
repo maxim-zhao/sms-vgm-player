@@ -72,6 +72,14 @@ def convert(args):
             # 2. Load the font for drawing
             print(f"Loading {arg} at size {size}")
             font = ImageFont.truetype(arg, size)
+            # Add a dummy space glyph
+            if 32 not in codepoints:
+                cp = CharacterInfo(32, font, offset, 8)
+                # Rewrite it
+                cp.img = Image.new('1', (2, 8), 0)
+                cp.width = 2
+                codepoints[32] = cp
+                
             for (codepoint, name) in get_font_codepoints(arg):
                 # 3. Add to dict if not already present
                 if codepoint not in codepoints and codepoint > 32:
@@ -113,6 +121,8 @@ def convert(args):
                 offset = 256*3
                 for n in range(256):
                     if n in local_chars:
+                        # Width, offset
+                        # Could remove offset and sum widths at runtime?
                         bin.write(struct.pack('B', local_chars[n].img.width))
                         bin.write(struct.pack('<H', offset))
                         offset += local_chars[n].img.width
