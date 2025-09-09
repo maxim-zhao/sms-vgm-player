@@ -21,10 +21,10 @@ art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
 art/screensaver.tilemap.zx0: art/screensaver.png
-	$(BMP2TILE) $< -tileoffset 154 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 410 -savetilemap $@
 
 art/3d-pad.tilemap.zx0: art/3d-pad.png
-	$(BMP2TILE) $< -tileoffset 0 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 256 -savetilemap $@
 
 %.tiles.psgcompr: %.png
 	$(BMP2TILE) $< -savetiles $@
@@ -52,9 +52,9 @@ fonts/%.bin.zx0: fonts/%.bin
 
 fonts/%.bin: fonts/font.asm
 
-fonts/font.asm: fonts/fontdump.py fonts/ZX_Chicago.ttf fonts/misaki_gothic.ttf
+fonts/font.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_gothic.ttf
 	python fonts/fontdump.py \
-	-size=8 -offset=0 fonts/MxPlus_Amstrad_PC.ttf \
+	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
 	-outdir=fonts -skip=ff,26,25,24,22,21,20,4,3
 

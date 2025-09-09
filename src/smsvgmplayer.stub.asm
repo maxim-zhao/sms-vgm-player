@@ -2,13 +2,42 @@
 ; by Maxim
 
 ; VRAM mapping stuff
-.define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
+; We have:
+; $0000 +-------------------------------------------+
+;       | Unused tile 0                          1t |
+; $0020 +-------------------------------------------+
+;       | VWF font drawing area for 199 tiles  199t |
+; $1800 +----------------+--------------------------+
+;       | Tilemap for VGM logo vis              56t |
+; $1f00 +-------------------------------------------+
+;         (256 unused bytes = 8 tiles)           8t
+; $2000 +-------------------------------------------+
+;       | Background art                       112t |
+; $2e00 +-------------------------------------------+
+;       | Large numbers                         32t |
+; $3200 +-------------------------------------------+
+;       | Small numbers                         10t |
+; $3340 +----------+----------+----------+----------+
+;       | Snow  4t | Scale    | Piano    | Logo     |
+; $33c0 +----------+       9t | + hands  |          |
+; $3460            +----------+      18t |          |
+; $3580                       +----------+      33t |
+; $3760                                  +----------+
+;         (160 unused bytes = 5 tiles)           5t
+; $3800 +-------------------------------------------+
+;       | Tilemap                               56t |
+; $3f00 +-------------------------------------------+
+;       | Sprite table                           8t |
+; $4000 +-------------------------------------------+
+
+.define SpriteSet               1       ; 0 for sprites to use tiles 0-255, 1 for 256+
+.define TilemapBaseAddressForLogo $1800
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
 .define Debug
 
-.define VGMSTARTPAGE 6 ; 1 for 16KB, 2 for 32KB
+.define VGMSTARTPAGE 5 ; 1 for 16KB, 2 for 32KB
 
 ; WLA-DX banking setup
 .memorymap
@@ -358,6 +387,10 @@ main:
   ld de, TilemapAddress(2, 10)
   call DrawTextASCII
 
+  ld hl,URLText
+  ld de, TilemapAddress(2, 23)
+  call DrawTextASCII
+
   ; Initial button state values (all off)
   ld a,$ff
   ld (LastButtonState),a
@@ -435,6 +468,8 @@ LoopText:
 .db "Loop", 0
 TotalText:
 .db "Total", 0
+URLText:
+.db "https://www.smspower.org/Music/VGMs",0
 .ends
 
 ;==============================================================
@@ -1905,13 +1940,14 @@ BlankVisArea:
   ; Blank vis area
   ld hl,VisLocation
   call VRAMToHL
-  ld bc,32*2*5
--:xor a
+  ld b,32*5
+-:ld a, <TileIndex_Background ; Blank tile is here
   out ($be),a
-  dec bc
-  ld a,b
-  or c
-  jr nz,-
+  nop
+  nop
+  ld a, >TileIndex_Background
+  out ($be),a
+  djnz -
   ret
   
 NormalTilemap:
@@ -2178,9 +2214,13 @@ InitPianoVis:
 -:  outi
     jr nz, -
     ; draw 2 blank lines
-    xor a
-    ld b,32*2*2
--:  out ($be),a
+    ld b,32*2
+-:  ld a, <TileIndex_Background
+    out ($be),a
+    nop
+    nop
+    ld a, >TileIndex_Background
+    out ($be),a
     djnz -
     
     ret
@@ -2590,18 +2630,10 @@ _noHands:
 
 .section "No vis" free
 InitNoVis:
-  call TurnOffScreen
-  ld de,TileVRAMAddressFromIndex(TileIndex_Background)
-  ld hl,Pad
-  call LoadZX0ToVRAM
-
   call UpdatePalette
   call NoSprites
   call BlankVisArea
-  call NormalTilemap
-  call TurnOnScreen
-  
-  ret
+  jp NormalTilemap ; and ret
 .ends
 
 .section "Snow vis" free
@@ -2880,13 +2912,13 @@ InitLogoVis:
   ld hl,LogoTiles
   call LoadZX0ToVRAM
   
-  ; Draw into secondary tilemap at $2800
+  ; Draw into secondary tilemap at TilemapBaseAddressForLogo
   ld hl,LogoTileNumbers
-  ld de,$4000|$2800
+  ld de,$4000|TilemapBaseAddressForLogo
   call LoadZX0ToVRAM
 
   ; Switch to it secondary tilemap
-  ld hl,$8200 | %11110001 | ($2800 >> 10)
+  ld hl,$8200 | %11110001 | (TilemapBaseAddressForLogo >> 10)
   call SetVDPRegister
   
   call TurnOnScreen
@@ -3025,7 +3057,7 @@ _toneMode:
 
 .ifdef Debug
   ; Debug: show value
-  ld hl, TilemapAddress(8,0)-$800
+  ld hl, TilemapAddress(8,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
   call VRAMToHL
   ld a,e
   call WriteNumber
@@ -3085,15 +3117,15 @@ _done:
   
 .ifdef Debug
   ; Debug: show value
-  ld hl, TilemapAddress(8,1)-$800
+  ld hl, TilemapAddress(8,1)-TilemapBaseAddress+TilemapBaseAddressForLogo
   call VRAMToHL
   ld a,(LogoBrightness)
   call WriteNumber
-  ld hl, TilemapAddress(10,0)-$800
+  ld hl, TilemapAddress(10,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
   call VRAMToHL
   ld a,(HighestVolumeSeen)
   call WriteNumber
-  ld hl, TilemapAddress(8,2)-$800
+  ld hl, TilemapAddress(8,2)-TilemapBaseAddress+TilemapBaseAddressForLogo
   call VRAMToHL
   ld a,(LogoBrightnessSmoothed)
   call WriteNumber
@@ -3195,7 +3227,8 @@ DrawLogoVis:
   jr z,+
   ld b,a
   xor a
--:out ($be),a
+-:out ($be),a ; This is too fast for active display...
+  nop
   djnz -
 +:; Then LogoBrightnessSmoothed+1 of our palette, doubled up
   ld b,(hl)
@@ -3231,7 +3264,7 @@ DrawLogoVis:
 ;==============================================================
 VDPRegisterInitData:
 .db %00100100,$80
-;    |||||||`- Disable synch
+;    |||||||`- Disable sync
 ;    ||||||`-- Enable extra height modes
 ;    |||||`--- SMS mode instead of SG
 ;    ||||`---- Shift sprites left 8 pixels
@@ -3278,6 +3311,8 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
+TileIndex_Blank               db
+TileIndex_VWF_Start           dsb 255
 TileIndex_Background          dsb 112
 TileIndex_BigNumbers          dsb 32
 TileIndex_SmallNumbers        dsb 10
@@ -3292,7 +3327,6 @@ TileIndex_SmallNumbers        dsb 10
 .nextu
   TileIndex_Sprite_Snow       dsb 4
 .endu
-TileIndex_VWF_Start           dsb 100
 .ende
 
 .macro TileMapFilter
@@ -3319,37 +3353,7 @@ PadData:
 
 ScaleData:
 .incbin "art\scale.tiles.zx0"
-/*
-TextData:
-.asc "   SMS VGM player\n"
-.asc "   v2.01 by Maxim\n"
-.asc "\n"
-.asc "  Time       Loop\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "    Total\n"
-.asc "    Loop\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc "\n"
-.asc " https://www.smspower.org/Music\n"
-.asc "JP:__ Location:__/____\n"
-.asc "50:__ Wait:____\n"
-.asc "FM:__\n"
-.db $ff
-*/
+
 NoVGMText:
 .asc "        ################\n"
 .asc "        # No VGM file! #\n"
@@ -3740,12 +3744,12 @@ WriteDigit:     ; writes the digit in a
     cp $0a      ; compare it to A - if it's less then it's 0-9
     jp c,+
     add a,'A'-'9'+1   ; if it's >9 then make it point at A-F TODO no longer available
-+:  add a,TileIndex_SmallNumbers
++:  add a,<TileIndex_SmallNumbers
 
     out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
     push hl
     pop hl
-    ld a,0
+    ld a,>TileIndex_SmallNumbers
     out ($BE),a
     ret
 
@@ -4145,9 +4149,9 @@ _bitplane_loop:
     call VRAMToDE
     inc de
     inc de
-    ld (VWFTilemapAddress), de
     ld a, (VWFCurrentTileIndex)
     out ($be), a
+    ld (VWFTilemapAddress), de
     xor a
     out ($be), a
   pop hl
