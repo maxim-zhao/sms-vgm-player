@@ -657,9 +657,9 @@ _DrawGd3StringForRegion:
   ; hl points to the strings, null-separated
   push hl ; preserve current pointer (to English string)
     ld a,(hl)
-    inc hl
+    call MoveHLForward
     or (hl)
-    inc hl
+    call MoveHLForward
     jr nz, +
     ; No English, use Japanese regardless of region
     call _DrawGD3String
@@ -713,9 +713,6 @@ _SkipGD3String:
 _DrawGD3String:
   ; TODO:
   ; 1. Limit to screen width - max tile count
-  ; 2. Buffer from ROM (potentially across a page boundary) to RAM?
-  ;    Or have the called function call back here?
-  ; Also need to move all other tiles to above 256!
   jp DrawTextUnicode
 .ends
 
@@ -3922,7 +3919,7 @@ DrawTextUnicode:
   ; First save the tilemap address
   ld (VWFTilemapAddress), de
 -:ld e, (hl)
-  inc hl
+  call MoveHLForward
   push hl
     ld d, (hl)
     ld a, d
@@ -3930,7 +3927,7 @@ DrawTextUnicode:
     jr z, + ; null terminated
     call _DrawUnicodeCharacter
   pop hl
-  inc hl
+  call MoveHLForward
   jr -
 +: ; End of string
   pop hl
@@ -3951,7 +3948,7 @@ DrawTextASCII:
   push hl
     call _DrawUnicodeCharacter
   pop hl
-  inc hl
+  call MoveHLForward
   jr -
 +: ; End of string
   ; Finish drawing it
@@ -4081,12 +4078,14 @@ _getNextAvailableTile:
   ret
   
 _flushTileToVRAM:
+  ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
+  ; top to bottom, one byte per pixel. We need to convert
+  ; to planar form: left to right, one bitplane per byte.
+  ; First get the tile address to write to...
+  ld a, (VWFCurrentTileIndex)
+  or a
+  ret z
   push hl
-    ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
-    ; top to bottom, one byte per pixel. We need to convert
-    ; to planar form: left to right, one bitplane per byte.
-    ; First get the tile address to write to...
-    ld a, (VWFCurrentTileIndex)
     ; VRAM address is $4000 + 32 * a
     ; Might be a better way than this?
     ld l, a
