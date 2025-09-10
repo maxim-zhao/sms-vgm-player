@@ -419,6 +419,10 @@ main:
   ld a,1
   ld (InitVisDI),a
 
+.ifdef Debug
+  call TurnOnScreen
+.endif
+
   ; Reset VGM player
   call VGMInitialise
 
