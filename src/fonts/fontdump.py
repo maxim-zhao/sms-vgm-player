@@ -101,13 +101,21 @@ def convert(args):
     # 3. Compress these using ZX7 or similar
     # 4. At runtime, decode the needed chunk to RAM (for ASCII, this will only be needed once) and follow the trail.
     #    256 words + 256 8px wide chars = 2560 bytes, will be smaller sometimes
-    
+    # TODO: try 512, 1024 code point chunks.
+    # More will require more RAM at runtime, and may be slower,
+    # but helps with compression.
+    bucket_factor = 256
+    #  256 -> 60230  (2000 bytes largest chunk) -> easiest to handle in asm
+    #  512 -> 59245  (3545)
+    # 1024 -> 58410  (5930) -> only about 2KB, I need more :(
+    # 2048 -> 57480 (11413) -> too large
+
     # 1. Split to chunks
     buckets = {}
     for char in chars:
-        bucket_key = (char.codepoint // 256)
+        bucket_key = (char.codepoint // bucket_factor)
         dict = buckets.setdefault(bucket_key, {})
-        dict[char.codepoint % 256] = char
+        dict[char.codepoint % bucket_factor] = char
     
     # 2. Emit a lookup table for these. As they are quite sparse, we will emit (key, pointer) pairs
     with open(f'{outdir}/font.asm', 'w') as asm:
@@ -121,8 +129,8 @@ def convert(args):
             with open(f'{outdir}/chunk{i:02x}.bin', 'wb') as bin:
                 local_chars = buckets[i]
                 # First the lookup
-                offset = 256*3
-                for n in range(256):
+                offset = bucket_factor*3
+                for n in range(bucket_factor):
                     if n in local_chars:
                         # Width, offset
                         # Could remove offset and sum widths at runtime?
@@ -142,8 +150,8 @@ def convert(args):
                             byte |= (bit << (7 - y))  # Top pixel is MSB
                         bin.write(struct.pack('B', byte))
                 # Also an image so I know what's in there
-                sheet = Image.new('RGB', (128, 128), (0, 0, 0))
-                for y in range(0, 128, 8):
+                sheet = Image.new('RGB', (128, bucket_factor//2), (0, 0, 0))
+                for y in range(0, bucket_factor//2, 8):
                     for x in range(0, 128, 8):
                         index = y // 8 * 16 + x // 8
                         if index in local_chars:

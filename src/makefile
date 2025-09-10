@@ -56,7 +56,7 @@ fonts/font.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_got
 	python fonts/fontdump.py \
 	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
-	-outdir=fonts -skip=ff,26,25,24,22,21,20,4,3
+	-outdir=fonts -skip=ff,20,21,22,23,24,25,26,27,3,4
 
 # And then we build it
 %.o: 

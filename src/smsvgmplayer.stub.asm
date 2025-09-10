@@ -3966,7 +3966,15 @@ _unsupportedCharacter:
   
 _DrawUnicodeCharacter:
   ; character is in de
-  ; First check we have the right chunk loaded
+  ; If it is in the range $ffxx, we map down to $0020+x.
+  ; This is correct for ASCII but not above that...
+  ld a, d
+  inc a
+  jr nz, +
+  ld hl, $120
+  add hl, de
+  ex de, hl
++:; First check we have the right chunk loaded
   call _loadChunk
   ; Now the data at ChunkData is the lookup based on e
   ld d, 0
