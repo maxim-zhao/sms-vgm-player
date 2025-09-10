@@ -29,6 +29,9 @@
 ; $3f00 +-------------------------------------------+
 ;       | Sprite table                           8t |
 ; $4000 +-------------------------------------------+
+; Currently using 67 tiles for text
+; + 31 * 4 for VGM tags = 195
+; No room for more!
 
 .define SpriteSet               1       ; 0 for sprites to use tiles 0-255, 1 for 256+
 .define TilemapBaseAddressForLogo $1800
@@ -390,6 +393,11 @@ main:
   ld hl,URLText
   ld de, TilemapAddress(2, 23)
   call DrawTextASCII
+  
+  ; Pre-load logo vis tilemap
+  ld hl,LogoTileNumbers
+  ld de,$4000|TilemapBaseAddressForLogo
+  call LoadZX0ToVRAM
 
   ; Initial button state values (all off)
   ld a,$ff
@@ -2910,10 +2918,6 @@ InitLogoVis:
   call LoadZX0ToVRAM
   
   ; Draw into secondary tilemap at TilemapBaseAddressForLogo
-  ld hl,LogoTileNumbers
-  ld de,$4000|TilemapBaseAddressForLogo
-  call LoadZX0ToVRAM
-
   ; Switch to it secondary tilemap
   ld hl,$8200 | %11110001 | (TilemapBaseAddressForLogo >> 10)
   call SetVDPRegister
