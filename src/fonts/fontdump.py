@@ -105,10 +105,11 @@ def convert(args):
     # More will require more RAM at runtime, and may be slower,
     # but helps with compression.
     bucket_factor = 256
-    #  256 -> 60230  (2000 bytes largest chunk) -> easiest to handle in asm
-    #  512 -> 59245  (3545)
-    # 1024 -> 58410  (5930) -> only about 2KB, I need more :(
-    # 2048 -> 57480 (11413) -> too large
+    #         ZX0   upkr    largest chunk
+    #  256 -> 60230 56354   2000            -> easiest to handle in asm
+    #  512 -> 59245 55031   3545
+    # 1024 -> 58410 53980   5930            -> only about 2KB saved, I need more :(
+    # 2048 -> 57480         11413           -> buffer too large
 
     # 1. Split to chunks
     buckets = {}

@@ -57,19 +57,6 @@ banksize $4000
 banks VGMSTARTPAGE
 .endro
 
-; This is sensitive to our font image
-.asciitable
-map 0 = $ff
-map "\n" = $fe
-map " " to "\"" = 0
-map "&" to ")" = $3
-map "+" to ";" = $7
-map "?" = $18
-map "A" to "Z" = $19
-map "a" to "z" = $33
-map "~" = $4d
-.enda
-
 .function TilemapAddress(x, y) TilemapBaseAddress+2*(x+y*32)+$4000
 .function TileVRAMAddressFromIndex(n) $4000+n*32
 .function colour(r,g,b) (r+(g<<2)+(b<<4))
@@ -149,6 +136,7 @@ VWFCurrentTileBufferPosition    dw ; Pointer to current column
 VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right
 VWFTilemapAddress               dw
+VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
 ZX0Memory                       dw
 ChunkData                       .db ; overlaps with the following
 ZX0TempBuffer                   dsb 1000 ; May be more...
@@ -250,7 +238,7 @@ VGMPlayerVBlank:
 ;==============================================================
 ; Pause button handler
 ;==============================================================
-.section "!NMI handler" FORCE
+.section "NMI handler" FORCE
   ; Dodgy PAL/NTSC speed switch
   push hl
   push de
@@ -394,11 +382,6 @@ main:
   ld de, TilemapAddress(2, 23)
   call DrawTextASCII
   
-  ; Pre-load logo vis tilemap
-  ld hl,LogoTileNumbers
-  ld de,$4000|TilemapBaseAddressForLogo
-  call LoadZX0ToVRAM
-
   ; Initial button state values (all off)
   ld a,$ff
   ld (LastButtonState),a
@@ -594,21 +577,20 @@ MoveHLForward:
   ; If it goes to $c000, it handles the paging
   inc hl
   push af
-    ld a,h
+    ld a, h
     cp $c0  ; Is it c?
     jr nz,+
     ; Need to decrement by $4000
-    res 6,h
+    res 6, h
     ; and page in the next page
-    ld a,(PAGING_SLOT_2)
+    ld a, (PAGING_SLOT_2)
     inc a
-    ld (PAGING_SLOT_2),a
+    ld (PAGING_SLOT_2), a
 +:pop af
   ret
 
 ;==============================================================
 ; GD3 displayer
-; Uses 34 bytes of RAM to buffer the text
 ;==============================================================
 DrawGD3Tag:
   push hl
@@ -654,7 +636,8 @@ DrawGD3Tag:
     _NoGD3:
     ; Say so
     ld hl,NoTagString
-    call WriteASCII
+    ld de, TilemapAddress(10, 18)
+    call DrawTextASCII
 
     _end:
   pop af
@@ -663,12 +646,12 @@ DrawGD3Tag:
   pop hl
   ret
 NoTagString:
-.db 32,10,"         - No GD3 tag -",10,32,10,32,10,0
+.db "- No GD3 tag -",0
 
 _DrawGd3StringForRegion:
   ; hl points to the strings, null-separated
   push hl ; preserve current pointer (to English string)
-    ld a,(hl)
+    ld a, (hl)
     call MoveHLForward
     or (hl)
     call MoveHLForward
@@ -723,8 +706,7 @@ _SkipGD3String:
   ret
 
 _DrawGD3String:
-  ; TODO:
-  ; 1. Limit to screen width - max tile count
+  ld c, 31 ; max width in tiles
   jp DrawTextUnicode
 .ends
 
@@ -1764,41 +1746,21 @@ EndGetDataLoop:
 
 ;==============================================================
 ; No VGM file - does not return
-; Maybe add a picture here?
 ;==============================================================
 .section "No VGM file" free
-_ClearScreen:
-    ; Clear the screen
-    ld hl,TilemapAddress(0,0)
-    call VRAMToHL
-    ld bc,$700
-    xor a
-  -:out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
-    dec c
-    jr nz,-
-    dec b
-    jr nz,-
-    ret
-
 NoVGMFile:
-    call _ClearScreen
-
     ; Display a message
-    ld iy,TilemapAddress(0,0)
     ld hl,NoVGMText
-    call WriteASCII
+    ld de,TilemapAddress(11,17)
+    call DrawTextASCII
 
-    ; Main screen turn on
-    ld a,(VDPRegister81Value)
-    or %01000000
-    ld (VDPRegister81Value),a
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
+    call TurnOnScreen
 
   -:halt
     jr -
 
+NoVGMText:
+.db "No VGM file!", 0
 
 .ends
 
@@ -1977,7 +1939,7 @@ FrequencyVisString:
 ;     |115|132|155|189|241|333|537|1398
 ;      |118|137|163|200|259|368|636|2330
 ;       |123|143|171|212|280|411|777|6991
-.asc " 100  Freq   200  /Hz  500 1k 7k",$ff
+.db " 100  Freq   200  /Hz  500 1k 7k",0
 
 InitFrequencyVis:
   call UpdatePalette
@@ -1991,8 +1953,8 @@ InitFrequencyVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,FrequencyVisString
-  ld iy,VisTextLocation
-  call WriteASCII
+  ld de,VisTextLocation
+  ;call DrawTextASCII
   ret
 
 ProcessFrequencyVis:
@@ -2148,7 +2110,7 @@ _FMNoteThresholds:
 
 .section "Volume bars vis" free
 VolumeVisString:
-.asc " Tone 1  Tone 2  Tone 3  Noise  ",$ff
+.db " Tone 1  Tone 2  Tone 3  Noise  ",0
 InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
@@ -2161,8 +2123,8 @@ InitVolumeVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,VolumeVisString
-  ld iy,VisTextLocation
-  call WriteASCII
+  ld de,VisTextLocation
+  ;call DrawTextASCII
   ret
 
 ProcessVolumeVis:
@@ -2187,7 +2149,7 @@ ProcessVolumeVis:
 
 .section "Piano vis" free
 PianoVisString:
-.asc "       Dave's Piano-matic       ",$ff
+.db "       Dave's Piano-matic       ",0
 InitPianoVis:
     call UpdatePalette
     call NormalTilemap
@@ -2201,8 +2163,8 @@ InitPianoVis:
     call LoadZX0ToVRAM
 
     ld hl,PianoVisString
-    ld iy,VisTextLocation
-    call WriteASCII
+    ld de,VisTextLocation
+    ;call DrawTextASCII
     
     ; Set sprites to 8x16 mode    
     ld a,(VDPRegister81Value)
@@ -2660,10 +2622,10 @@ InitNoVis:
 ; So now I can traverse the byte-sized tables with XSpeed at Y+NumSnowFlakes,
 ; and XN at AngleSpeed-NumSnowFlakes*2
 SnowText:
-.asc "\n"
-.asc "  Dancing snow...\n"
-.asc "\n"
-.asc "              ...with flashing",$ff
+.db "\n"
+.db "  Dancing snow...\n"
+.db "\n"
+.db "              ...with flashing",0
 
 InitSnowVis:
     call UpdatePalette
@@ -2685,8 +2647,8 @@ InitSnowVis:
 
   ; Fill vis area with my text
   ld hl,SnowText
-  ld iy,VisLocation
-  call WriteASCII
+  ld de,VisLocation
+  ;call DrawTextASCII
 
   ; Fill buffer with initial spaced Ys
   xor a
@@ -2917,12 +2879,17 @@ InitLogoVis:
   call TurnOffScreen
   call NoSprites
   
+  ; Tiles...
   ld de,TileVRAMAddressFromIndex(TileIndex_Logo)
   ld hl,LogoTiles
   call LoadZX0ToVRAM
+
+  ; Tilemap...
+  ld hl,LogoTileNumbers
+  ld de,$4000|TilemapBaseAddressForLogo
+  call LoadZX0ToVRAM
   
   ; Draw into secondary tilemap at TilemapBaseAddressForLogo
-  ; Switch to it secondary tilemap
   ld hl,$8200 | %11110001 | (TilemapBaseAddressForLogo >> 10)
   call SetVDPRegister
   
@@ -3359,32 +3326,6 @@ PadData:
 ScaleData:
 .incbin "art\scale.tiles.zx0"
 
-NoVGMText:
-.asc "        ################\n"
-.asc "        # No VGM file! #\n"
-.asc "        ################\n"
-.asc "\n"
-.asc " No VGM file has been found by\n"
-.asc " the player. You have to add a\n"
-.asc " file to the player for it to\n"
-.asc " work. You can do this by using\n"
-.asc " this commandline:\n"
-.asc "\n"
-.asc " copy /b vgmplayer.stub+\n"
-.asc "         vgmfile.vgm output.sms\n"
-.asc "\n"
-.asc "      (all on one line)\n"
-.asc " where:\n"
-.asc " - vgmplayer.stub is the 16KB\n"
-.asc "   player file\n"
-.asc " - vgmfile.vgm is an\n"
-.asc "   UNCOMPRESSED VGM file\n"
-.asc " - output.sms is the combined\n"
-.asc "   file which will be created\n"
-.asc "\n"
-.asc "  http://www.smspower.org/Music\n"
-.db $ff
-
 PianoTiles:
 .incbin "art\piano.tiles.zx0"
 
@@ -3658,26 +3599,6 @@ LoadPalette:
 .ends
 
 ;==============================================================
-; Write ASCII text pointed to by hl to VRAM
-; Stops when it finds a null byte, skips control characters,
-; understands \n
-; Pass name table address in iy, it will not be modified
-;==============================================================
-.section "Write ASCII" FREE
-VRAMToIY:
-    push hl
-    push iy
-    pop hl
-    call VRAMToHL
-    pop hl
-    ret
-
-WriteASCII:
-    ; TODO?
-    ret
-.ends
-
-;==============================================================
 ; Set VRAM address to hl
 ;==============================================================
 .section "VRAM address to hl" FREE
@@ -3924,8 +3845,14 @@ VRAMToDE:
 DrawTextUnicode:
   ; hl = source 16-bit
   ; de = VRAM address of first tile
+  ; c = max tile count
   ; First save the tilemap address
   ld (VWFTilemapAddress), de
+  ld a, c
+  ld (VWFTileCount), a
+  ; Clear the loaded chunk state, assume the buffer has been overwritten
+  ld a, -1
+  ld (CurrentChunk), a
 -:ld e, (hl)
   call MoveHLForward
   push hl
@@ -3939,7 +3866,7 @@ DrawTextUnicode:
   jr -
 +: ; End of string
   pop hl
-  inc hl
+  call MoveHLForward
   jr +
 
 DrawTextASCII:
@@ -3947,6 +3874,10 @@ DrawTextASCII:
   ; de = VRAM address of first tile
   ; First save the tilemap address
   ld (VWFTilemapAddress), de
+  ; Clear the loaded chunk state
+  ld a, -1
+  ld (CurrentChunk), a
+  ld (VWFTileCount), a ; not limiting...
   ; Draw text by converting to Unicode...
 -:ld a, (hl)
   or a
@@ -4068,6 +3999,12 @@ _getNextAvailableTile:
     ld a, (VWFCurrentTileIndex)
     or a
     call nz, _flushTileToVRAM
+    ; Decrement the counter
+    ld hl, VWFTileCount
+    ld a, (hl)
+    or a
+    jr z, _noMoreTiles
+    dec (hl)
     ; Assign the next index
     ld hl, VWFNextUnusedTile
     ld a, (hl)
@@ -4084,7 +4021,7 @@ _getNextAvailableTile:
     ld bc, _sizeof_VWFTileBuffer - 8 - 1
     ld (hl), 4 ; Background colour
     ldir
-    ; Point to it
+-:  ; Point to it
     ld hl, VWFTileBuffer
     ld (VWFCurrentTileBufferPosition), hl
     ; And set the counter
@@ -4092,6 +4029,13 @@ _getNextAvailableTile:
     ld (VWFRemainingColumns), a
   pop de
   ret
+
+_noMoreTiles:
+    ; We clear this so we won't flush any more
+    xor a
+    ld (VWFCurrentTileIndex), a
+    ; Then continue on as if everything is fine...
+    jr -
   
 _flushTileToVRAM:
   ; Emit one tile. Data is at VWFTileBuffer in "chunky" form:
