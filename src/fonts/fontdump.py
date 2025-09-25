@@ -68,6 +68,8 @@ def convert(args):
                 outdir = value
             elif key == 'skip':
                 skip.update([int(x, 16) for x in value.split(',')])
+            elif key == 'filename':
+                filename = value
             else:
                 print(f"Unknown key {key}")
         else:
@@ -119,7 +121,7 @@ def convert(args):
         dict[char.codepoint % bucket_factor] = char
     
     # 2. Emit a lookup table for these. As they are quite sparse, we will emit (key, pointer) pairs
-    with open(f'{outdir}/font.asm', 'w') as asm:
+    with open(filename, 'w') as asm:
         asm.write('.section "Font chunks lookup" force\n')
         asm.write('Chunks:\n')
         asm.write('.table byte, byte, word ; high byte of char, bank, offset\n')

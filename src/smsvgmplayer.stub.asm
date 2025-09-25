@@ -38,9 +38,17 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define Debug
+;.define Debug
 
-.define VGMSTARTPAGE 5 ; 1 for 16KB, 2 for 32KB
+.ifdef UNICODE
+.define VGMSTARTPAGE 5
+.else
+.ifdef Debug
+.define VGMSTARTPAGE 2 ; more space needed for debug code
+.else
+.define VGMSTARTPAGE 1
+.endif
+.endif
 
 ; WLA-DX banking setup
 .memorymap
@@ -3807,7 +3815,11 @@ HasFMChip:
     ret
 .ends
 
-.include "fonts/font.asm"
+.ifdef UNICODE
+.include "fonts/font-unicode.asm"
+.else
+.include "fonts/font-ascii.asm"
+.endif
 
 .bank 0 slot 0
 .section "ZX0 art shims" free
