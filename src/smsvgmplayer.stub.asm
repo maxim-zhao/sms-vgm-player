@@ -95,6 +95,11 @@ banks VGMSTARTPAGE
   .endif
 .endm
 
+.macro TextWithAddress args x, y, text
+.dw TilemapAddress(x, y)
+.db text, 0
+.endm
+
 .bank 0 slot 0
 .org $0000
 
@@ -133,20 +138,19 @@ LoopsChanged                    db
 PaletteChanged                  db
 PaletteNumber                   db
 RandomSR                        dw ; Random number generator shift register, needs seeding
-GD3DisplayerBuffer              dsb 33
-VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
 CurrentChunk                    db ; Chunk number currently loaded
 VWFCurrentTileIndex             db ; Tile index currently being drawn into
 VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFRemainingColumns             db ; Number of columns left to draw
 VWFCurrentTileBufferPosition    dw ; Pointer to current column
-VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right
+VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 VWFTilemapAddress               dw
 VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
 ZX0Memory                       dw
+VGMMemoryStart                  dsb 256
 ChunkData                       .db ; overlaps with the following
-ZX0TempBuffer                   dsb 1000 ; May be more...
+ZX0TempBuffer                   dsb 2000 ; May be more...
 .ende
 
 .section "ZX0 decompressor" free
@@ -373,31 +377,7 @@ main:
   
   ld hl,TitleText
   ld de, TilemapAddress(2, 1)
-  call DrawTextASCII
-
-  ld hl,TitleText2
-  ld de, TilemapAddress(6, 2)
-  call DrawTextASCII
-
-  ld hl,TimeText
-  ld de, TilemapAddress(2, 4)
-  call DrawTextASCII
-
-  ld hl,LoopText
-  ld de, TilemapAddress(13, 4)
-  call DrawTextASCII
-
-  ld hl,TotalText
-  ld de, TilemapAddress(2, 9)
-  call DrawTextASCII
-
-  ld hl,LoopText
-  ld de, TilemapAddress(2, 10)
-  call DrawTextASCII
-
-  ld hl,URLText
-  ld de, TilemapAddress(2, 23)
-  call DrawTextASCII
+  call DrawTextASCII_XY
   
   ; Initial button state values (all off)
   ld a,$ff
@@ -468,17 +448,14 @@ InfiniteLoop:   ; to stop the program
 
 .section "Text" free
 TitleText:
-.db "SMS VGM Player v2.1", 0
-TitleText2:
-.db "by Maxim", 0
-TimeText:
-.db "Time", 0
-LoopText:
-.db "Loop", 0
-TotalText:
-.db "Total", 0
-URLText:
-.db "https://www.smspower.org/Music/VGMs",0
+  TextWithAddress  2,  1, "SMS VGM Player v2.1"
+  TextWithAddress  6,  2, "by Maxim"
+  TextWithAddress  2,  4, "Time"
+  TextWithAddress 13,  4, "Loop"
+  TextWithAddress  2,  9, "Total"
+  TextWithAddress  2, 10, "Loop"
+  TextWithAddress  2, 23, "https://www.smspower.org/Music/VGMs"
+.db 0
 .ends
 
 ;==============================================================
@@ -1943,11 +1920,6 @@ NormalTilemap:
   ret
 .ends
 
-.macro TextWithAddress args x, y, text
-.dw TilemapAddress(x, y)
-.db text, 0
-.endm
-
 .section "Frequency bars vis" free
 FrequencyVisString:
 ; Mid values for | to left of each number:
@@ -1978,7 +1950,7 @@ InitFrequencyVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,FrequencyVisString
-  jp DrawTextASCII_XY
+  jp DrawTextASCII_XY_ForVisNames
 
 ProcessFrequencyVis:
     call ClearBuffer
@@ -2151,7 +2123,7 @@ InitVolumeVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,VolumeVisString
-  jp DrawTextASCII_XY
+  jp DrawTextASCII_XY_ForVisNames
 
 ProcessVolumeVis:
     call ClearBuffer
@@ -2192,7 +2164,7 @@ InitPianoVis:
     call LoadZX0ToVRAM
 
     ld hl,PianoVisString
-    call DrawTextASCII_XY
+    call DrawTextASCII_XY_ForVisNames
     
     ; Set sprites to 8x16 mode    
     ld a,(VDPRegister81Value)
@@ -3902,24 +3874,27 @@ DrawTextASCII:
   ld (VWFRemainingColumns), a
   ret
 
-DrawTextASCII_XY:
+DrawTextASCII_XY_ForVisNames:
   ; Preserve VWFNextUnusedTile around the call
   ld a, (VWFNextUnusedTile)
   push af
-    ; hl = pointer to (address), (text) pairs, null terminated
--:  ld a, (hl)
-    or a
-    jr z, +
-    ld e, a
-    inc hl ; Assume we are not across page boundaries here, as it's not GD3
-    ld d, (hl)
-    inc hl
-    call DrawTextASCII
-    inc hl
-    jr -
-+:pop af
+    call DrawTextASCII_XY
+  pop af
   ld (VWFNextUnusedTile), a
   ret
+  
+DrawTextASCII_XY:
+  ; hl = pointer to (address), (text) pairs, null terminated
+-:ld a, (hl)
+  or a
+  ret z
+  ld e, a
+  inc hl ; Assume we are not across page boundaries here, as it's not GD3
+  ld d, (hl)
+  inc hl
+  call DrawTextASCII
+  inc hl
+  jr -
 
 _unsupportedCharacter:
   ; Draw a question mark instead
@@ -4091,8 +4066,9 @@ _row_loop:
     push hl
       ; For the current row, we will generate all 4 bitplane bytes.
 
-      ld b, 4 ; Bitplanes
-      ld c, %0001 ; Bitmask for bitplane 0
+      ;ld b, 4 ; Bitplanes
+      ;ld c, %0001 ; Bitmask for bitplane 0
+      ld bc, $0401 ; faster version
 
 _bitplane_loop:
       push bc
@@ -4105,11 +4081,13 @@ _bitplane_loop:
         and c       ; Mask to bit of interest
         jr z, +     ; Skip if 0
         inc e       ; Else set LSB
-+:      ; hl += 8 ; inc hl x8 = 48
-        push de         ; 11
-          ld de, 8      ; 10
-          add hl, de    ; 11
-        pop de          ; 10 => 42
++:      ; Move hl on by 8
+        ; inc hl x8 = 48 cycles
+        ; push de / ld de, 8 / add hl, de / pop de = 42 cycles
+        ; If we assume hl does not cross a multiple of 256...
+        ld a, 8
+        add l
+        ld l, a     ; 15 cycles
 
         djnz -
 
@@ -4120,7 +4098,7 @@ _bitplane_loop:
       pop hl
       pop bc
       sla c ; Shift bitmask left
-      djnz _bitplane_loop ; repeat for 4 bitplanes
+      djnz _bitplane_loop ; repeat for 4 bitplanes, with the same source data (hl)
 
     pop hl
     pop bc
