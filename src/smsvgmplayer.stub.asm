@@ -136,12 +136,11 @@ RandomSR                        dw ; Random number generator shift register, nee
 GD3DisplayerBuffer              dsb 33
 VGMMemoryStart                  dsb 256
 VDPRegister81Value              db
-InitVisDI                       db
 CurrentChunk                    db ; Chunk number currently loaded
 VWFCurrentTileIndex             db ; Tile index currently being drawn into
+VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFRemainingColumns             db ; Number of columns left to draw
 VWFCurrentTileBufferPosition    dw ; Pointer to current column
-VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right
 VWFTilemapAddress               dw
 VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
@@ -190,6 +189,16 @@ GetByte:
     ld (PAGING_SLOT_2),a
     ld b,$80 ; wrap to $8000
   pop af
+  ret
+.ends
+
+.org $08
+.section "VRAM to DE" force
+VRAMToDE:
+  ld a,e
+  out ($bf),a
+  ld a,d
+  out ($bf),a
   ret
 .ends
 
@@ -404,11 +413,6 @@ main:
   ; Load settings, initialise stuff
   call LoadSettings
   call UpdatePalette
-  xor a
-  ld (InitVisDI),a
-  call InitialiseVis
-  ld a,1
-  ld (InitVisDI),a
 
 .ifdef Debug
   call TurnOnScreen
@@ -419,19 +423,21 @@ main:
 
 .ifdef Debug
   ; Debug: show detected information
-  ld hl, TilemapAddress(3, 24)
-  call VRAMToHL
+  ld de, TilemapAddress(3, 24)
+  rst VRAMToDE
   ld a,(IsJapConsole)
   call WriteNumber
-  ld hl, TilemapAddress(3, 25)
-  call VRAMToHL
+  ld de, TilemapAddress(3, 25)
+  rst VRAMToDE
   ld a,(IsPalConsole)
   call WriteNumber
-  ld hl, TilemapAddress(3, 26)
-  call VRAMToHL
+  ld de, TilemapAddress(3, 26)
+  rst VRAMToDE
   ld a,(FMChipDetected)
   call WriteNumber
 .endif
+
+  call InitialiseVis
 
   ; Set VBlank routine
   ld hl,VGMPlayerVBlank
@@ -726,15 +732,14 @@ ShowTime:
   or a
   ret z
   ; get digits
-  ld de,(VGMTimeMins)     ; d = sec  e = min
+  ld hl,(VGMTimeMins)     ; h = sec  l = min
   ; Set start name table address
-  ld hl, TilemapAddress(2, 6)
+  ld de, TilemapAddress(2, 6)
   ; Output digit(s)
-  ld b,e
+  ld b,l
   call DrawByte
-  ld bc,6
-  add hl,bc
-  ld b,d
+  ld de, TilemapAddress(7, 6)
+  ld b,h
   call DrawByte
   xor a
   ld (SecondsChanged),a
@@ -752,7 +757,7 @@ ShowLoopNumber:
     push hl
       ld a,(VGMLoopsPlayed)
       ld b,a
-      ld hl, TilemapAddress(13, 6)
+      ld de, TilemapAddress(13, 6)
       call DrawByte
       xor a
       ld (LoopsChanged),a
@@ -763,7 +768,7 @@ ShowLoopNumber:
 
 ;==============================================================
 ; Write 2-digit BCD number in b using large numbers,
-; at screen position hl (which is modified)
+; at screen position de (which is modified)
 ;==============================================================
 DrawByte:
   push af
@@ -774,10 +779,10 @@ DrawByte:
     srl a
     call DrawLargeDigit
     ; move to next space
-    inc hl
-    inc hl
-    inc hl
-    inc hl
+    inc de
+    inc de
+    inc de
+    inc de
     ld a,b
     and $0f
     call DrawLargeDigit
@@ -786,36 +791,37 @@ DrawByte:
 
 ;==============================================================
 ; Write lower BCD digit in a using large numbers,
-; at screen position hl. Preserve bc, de, hl; trash a
+; at screen position de. Preserve bc, de, hl; trash a
 ;==============================================================
 DrawLargeDigit:
-  call VRAMToHL
+  push af
+    rst VRAMToDE
+  pop af
   push bc
   push de
   push hl
     add a,a
     add a,a ; multiply by 4
+    ld hl,BigNumbersTilemap
+    add l
+    ld l,a
+    adc h
+    sub l
+    ld h,a
+    call _drawTwoTiles ; leaves hl pointing at the last byte used
+    
+    ; One row below is 37 bytes after that in the source data
+    ld bc,37
+    add hl,bc
+    
+    ; Next row is 64 bytes below
     push hl
-      ld hl,BigNumbersTilemap
-      add l
-      ld l,a
-      adc h
-      sub l
-      ld h,a
-      call _drawTwoTiles ; leaves hl pointing at the last byte used
-      
-      ; One row below is 37 bytes after that
-      ld bc,37
-      add hl,bc
-      ; Save that
+      ld hl,64
+      add hl,de
       ex de,hl
+      rst VRAMToDE
     pop hl
     
-    ld bc,64
-    add hl,bc
-    call VRAMToHL
-    
-    ex de,hl
     call _drawTwoTiles
   pop hl
   pop de
@@ -1027,7 +1033,7 @@ VGMInitialise:
     jr c,+
     inc bc
 +:  ld de, TilemapAddress(10, 9)
-    call VRAMToDE
+    rst VRAMToDE
     ld hl,0
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
@@ -1035,7 +1041,7 @@ VGMInitialise:
     call Hex2BCD
     call WriteNumber
     ld de, TilemapAddress(13, 9)
-    call VRAMToDE
+    rst VRAMToDE
     ld a,l
     call Hex2BCD
     call WriteNumber
@@ -1057,12 +1063,12 @@ VGMInitialise:
     ld de,60
     call Divide16   ; hl = seconds, bc = minutes
     ld de, TilemapAddress(10, 10)
-    call VRAMToDE
+    rst VRAMToDE
     ld a,c
     call Hex2BCD
     call WriteNumber
     ld de, TilemapAddress(13, 10)
-    call VRAMToDE
+    rst VRAMToDE
     ld a,l
     call Hex2BCD
     call WriteNumber
@@ -1330,14 +1336,14 @@ GetData:
     push af
     push hl
       ld a,b
-      ld hl, TilemapAddress(18, 24)
-      call VRAMToHL
+      ld de, TilemapAddress(18, 24)
+      rst VRAMToDE
       call WriteNumber
       ld a,c
       call WriteNumber
       ld a,(PAGING_SLOT_2)
-      ld hl, TilemapAddress(15, 24)
-      call VRAMToHL
+      ld de, TilemapAddress(15, 24)
+      rst VRAMToDE
       call WriteNumber
     pop hl
     pop af
@@ -1662,10 +1668,8 @@ DoINeedToWait:
 
 .ifdef Debugx
     ; Debug display of information (wait total)
-    push hl
-      ld hl, TilemapAddress(11, 25)
-      call VRAMToHL
-    pop hl
+    ld de, TilemapAddress(11, 25)
+    rst VRAMToDE
     ld a,h
     call WriteNumber
     ld a,l
@@ -1777,7 +1781,6 @@ NoVGMText:
 ;==============================================================
 .section "Visualisations" free
 .define VisLocation TilemapAddress(0,12)
-.define VisTextLocation TilemapAddress(0,16)
 
 .struct VisData
   InitFunction    dw
@@ -1882,8 +1885,8 @@ ClearBuffer:   ; uses a,bc,de,hl
 
 DrawVisBufferAsBars:
 ; Draw first 32 entries of VisBuffer as vertical bars of height == value
-    ld hl,VisLocation
-    call VRAMToHL
+    ld de,VisLocation
+    rst VRAMToDE
     ld c,4      ; Number of rows
 --: ; Draw line
     ld b,32
@@ -1917,8 +1920,8 @@ _LessThan8:
     
 BlankVisArea:
   ; Blank vis area
-  ld hl,VisLocation
-  call VRAMToHL
+  ld de,VisLocation
+  rst VRAMToDE
   ld b,32*5
 -:ld a, <TileIndex_Background ; Blank tile is here
   out ($be),a
@@ -1930,28 +1933,42 @@ BlankVisArea:
   ret
   
 NormalTilemap:
-  ld hl,$8200 | %11110001 | (TilemapBaseAddress >> 10)
-  call SetVDPRegister
+  ld de,$8200 | %11110001 | (TilemapBaseAddress >> 10)
+  rst VRAMToDE
   ; No scrolling
-  ld hl,$8800
-  call SetVDPRegister
-  ld hl,$8900
-  call SetVDPRegister
+  ld de,$8800
+  rst VRAMToDE
+  ld de,$8900
+  rst VRAMToDE
   ret
 .ends
+
+.macro TextWithAddress args x, y, text
+.dw TilemapAddress(x, y)
+.db text, 0
+.endm
 
 .section "Frequency bars vis" free
 FrequencyVisString:
 ; Mid values for | to left of each number:
+;    ________________________________
 ;    |110|127|149|179|226|304|466|999
 ;     |115|132|155|189|241|333|537|1398
 ;      |118|137|163|200|259|368|636|2330
 ;       |123|143|171|212|280|411|777|6991
-.db " 100  Freq   200  /Hz  500 1k 7k",0
+;    ________________________________
+;    100 Frequenc 200  /Hz   500 1k 7k",0
+  TextWithAddress  1, 16, "100"
+  TextWithAddress  5, 16, "Frequency"
+  TextWithAddress 14, 16, "200"
+  TextWithAddress 18, 16, "/Hz"
+  TextWithAddress 25, 16, "500  1k 7k"
+.db 0
 
 InitFrequencyVis:
   call UpdatePalette
   call NormalTilemap
+  call BlankVisArea
   
   ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
   ld hl,ScaleData
@@ -1961,9 +1978,7 @@ InitFrequencyVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,FrequencyVisString
-  ld de,VisTextLocation
-  ;call DrawTextASCII
-  ret
+  jp DrawTextASCII_XY
 
 ProcessFrequencyVis:
     call ClearBuffer
@@ -2118,10 +2133,15 @@ _FMNoteThresholds:
 
 .section "Volume bars vis" free
 VolumeVisString:
-.db " Tone 1  Tone 2  Tone 3  Noise  ",0
+  TextWithAddress  3, 16, "Tone 1"
+  TextWithAddress 11, 16, "Tone 2"
+  TextWithAddress 19, 16, "Tone 3"
+  TextWithAddress 27, 16, "Noise"
+.db 0
 InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
+  call BlankVisArea
 
   ld de,TileVRAMAddressFromIndex(TileIndex_Scale) ; Load vis tiles
   ld hl,ScaleData
@@ -2131,9 +2151,7 @@ InitVolumeVis:
   call ClearBuffer
   call DrawVisBufferAsBars
   ld hl,VolumeVisString
-  ld de,VisTextLocation
-  ;call DrawTextASCII
-  ret
+  jp DrawTextASCII_XY
 
 ProcessVolumeVis:
     call ClearBuffer
@@ -2157,10 +2175,13 @@ ProcessVolumeVis:
 
 .section "Piano vis" free
 PianoVisString:
-.db "       Dave's Piano-matic       ",0
+  TextWithAddress 9, 16, "Dave's Piano-matic"
+.db 0
+
 InitPianoVis:
     call UpdatePalette
     call NormalTilemap
+    call BlankVisArea
 
     ld de,TileVRAMAddressFromIndex(TileIndex_Piano)
     ld hl,PianoTiles
@@ -2171,8 +2192,7 @@ InitPianoVis:
     call LoadZX0ToVRAM
 
     ld hl,PianoVisString
-    ld de,VisTextLocation
-    ;call DrawTextASCII
+    call DrawTextASCII_XY
     
     ; Set sprites to 8x16 mode    
     ld a,(VDPRegister81Value)
@@ -2184,8 +2204,8 @@ InitPianoVis:
 
     call ClearBuffer
     ; Draw tiles
-    ld hl,VisLocation
-    call VRAMToHL
+    ld de,VisLocation
+    rst VRAMToDE
     ld hl,PianoTileNumbers
     ; We may run into the active display so output it slower than otir
     ld c,$be
@@ -2523,8 +2543,8 @@ DrawPianoVis:
 
     .define NumHands 9
 
-    ld hl,SpriteTableBaseAddress
-    call VRAMToHL
+    ld de,SpriteTableBaseAddress|$4000
+    rst VRAMToDE
     
     ; Get count
     ld a,(VisBuffer+0)
@@ -2548,8 +2568,8 @@ _smallHands:
     ld a,$d0
     out ($be),a
 
-    ld hl,SpriteTableBaseAddress+128
-    call VRAMToHL
+    ld de,(SpriteTableBaseAddress+128)|$4000
+    rst VRAMToDE
     ld hl,VisBuffer+16
 
     ld b,c
@@ -2578,8 +2598,8 @@ _bigHands:
     ld a,$d0
     out ($be),a
 
-    ld hl,SpriteTableBaseAddress+128
-    call VRAMToHL
+    ld de,(SpriteTableBaseAddress+128)|$4000
+    rst VRAMToDE
     ld hl,VisBuffer+16
 
     ld b,c
@@ -2636,20 +2656,20 @@ SnowText:
 .db "              ...with flashing",0
 
 InitSnowVis:
-    call UpdatePalette
-    call NormalTilemap
+  call UpdatePalette
+  call NormalTilemap
 
-    ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
-    ld hl,Snow
-    call LoadZX0ToVRAM
+  ld de,TileVRAMAddressFromIndex(TileIndex_Sprite_Snow)
+  ld hl,Snow
+  call LoadZX0ToVRAM
 
-    ; Set sprites to 8x8 mode    
-    ld a,(VDPRegister81Value)
-    and %11111101
-    ld (VDPRegister81Value),a
-    out ($bf),a
-    ld a,$81
-    out ($bf),a
+  ; Set sprites to 8x8 mode    
+  ld a,(VDPRegister81Value)
+  and %11111101
+  ld (VDPRegister81Value),a
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
   
   call BlankVisArea
 
@@ -2804,16 +2824,16 @@ DrawSnowVis:
   out ($be),a
 
   ; Emit to sprite table
-  ld hl,SpriteTableBaseAddress
-  call VRAMToHL
+  ld de,SpriteTableBaseAddress|$4000
+  rst VRAMToDE
   ld hl,SnowflakeYs
   ld b,NumSnowFlakes*2 ; because outi + djnz will double-decrement b
   ld c,$be
 -:outi ; 16
   djnz - ; 13 -> 29 cycles. otir is too fast!
 
-  ld hl,SpriteTableBaseAddress+128
-  call VRAMToHL
+  ld de,(SpriteTableBaseAddress+128)|$4000
+  rst VRAMToDE
   ld b,<(NumSnowFlakes*2*2)
   ld hl,SnowflakeXNs
 -:outi
@@ -2898,14 +2918,14 @@ InitLogoVis:
   call LoadZX0ToVRAM
   
   ; Draw into secondary tilemap at TilemapBaseAddressForLogo
-  ld hl,$8200 | %11110001 | (TilemapBaseAddressForLogo >> 10)
-  call SetVDPRegister
+  ld de,$8200 | %11110001 | (TilemapBaseAddressForLogo >> 10)
+  rst VRAMToDE
   
   call TurnOnScreen
   
   ; Set border to black
-  ld hl,$c010
-  call SetVDPAddress
+  ld de,$c010
+  rst VRAMToDE
   xor a
   out ($be),a
 
@@ -3037,8 +3057,10 @@ _toneMode:
 
 .ifdef Debug
   ; Debug: show value
-  ld hl, TilemapAddress(8,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
-  call VRAMToHL
+  push de
+    ld de, TilemapAddress(8,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
+    rst VRAMToDE
+  pop de
   ld a,e
   call WriteNumber
 .endif
@@ -3097,16 +3119,16 @@ _done:
   
 .ifdef Debug
   ; Debug: show value
-  ld hl, TilemapAddress(8,1)-TilemapBaseAddress+TilemapBaseAddressForLogo
-  call VRAMToHL
+  ld de, TilemapAddress(8,1)-TilemapBaseAddress+TilemapBaseAddressForLogo
+  rst VRAMToDE
   ld a,(LogoBrightness)
   call WriteNumber
-  ld hl, TilemapAddress(10,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
-  call VRAMToHL
+  ld de, TilemapAddress(10,0)-TilemapBaseAddress+TilemapBaseAddressForLogo
+  rst VRAMToDE
   ld a,(HighestVolumeSeen)
   call WriteNumber
-  ld hl, TilemapAddress(8,2)-TilemapBaseAddress+TilemapBaseAddressForLogo
-  call VRAMToHL
+  ld de, TilemapAddress(8,2)-TilemapBaseAddress+TilemapBaseAddressForLogo
+  rst VRAMToDE
   ld a,(LogoBrightnessSmoothed)
   call WriteNumber
 .endif
@@ -3198,8 +3220,8 @@ RandomPalette:
   ret
 
 DrawLogoVis:
-  ld hl,$c00a ; Logo colours
-  call VRAMToHL
+  ld de,$c00a ; Logo colours
+  rst VRAMToDE
   ; We emit 5-LogoBrightnessSmoothed blacks...
   ld hl,LogoBrightnessSmoothed
   ld a,5
@@ -3226,17 +3248,16 @@ DrawLogoVis:
 
   ; Update scroll registers
   ld a,(LogoXHi)
-  ld l,a
-  ld h,$88
-  call SetVDPRegister
+  ld e,a
+  ld d,$88
+  rst VRAMToDE
   ; We invert the scroll compared to the Y value. This is to try to make the maths easier above.
   ld a,(LogoYHi)
   neg
   sub 256-224
-  ld l,a
-  ld h,$89
-  call SetVDPRegister
-  ret
+  ld e,a
+  ld d,$89
+  jp VRAMToDE
 .ends
 
 ;==============================================================
@@ -3524,10 +3545,10 @@ ClearVRAM:
     push hl
     push bc
     push af
-        ld hl,0
-        call VRAMToHL
+        ld de,$4000
+        rst VRAMToDE
         ld bc, $4000    ; Counter for 16KB of VRAM
-        ld a,$00        ; Value to write
+        xor a           ; Value to write
         _Loop:
             out ($BE),a ; Output to VRAM address, which is auto-incremented after each write
             dec c
@@ -3572,12 +3593,12 @@ TurnOnScreen:
 .section "No sprites" FREE
 NoSprites:
     push af
-    push hl
-        ld hl,SpriteTableBaseAddress
-        call VRAMToHL
+    push de
+        ld de,SpriteTableBaseAddress|$4000
+        rst VRAMToDE
         ld a,$d0
         out ($be),a
-    pop hl
+    pop de
     pop af
     ret
 .ends
@@ -3604,28 +3625,6 @@ LoadPalette:
     pop bc
     pop af
     ret
-.ends
-
-;==============================================================
-; Set VRAM address to hl
-;==============================================================
-.section "VRAM address to hl" FREE
-VRAMToHL:
-    push af
-        ld a,l
-        out ($BF),a
-        ld a,h
-        or $40
-        out ($BF),a
-    pop af
-    ret
-SetVDPAddress:
-SetVDPRegister:
-  ld a,l
-  out ($BF),a
-  ld a,h
-  out ($BF),a
-  ret
 .ends
 
 .section "Hex to BCD" FREE
@@ -3824,7 +3823,7 @@ HasFMChip:
 .bank 0 slot 0
 .section "ZX0 art shims" free
 LoadZX0ToVRAM:
-  call VRAMToDE
+  rst VRAMToDE
   ; Decompress to RAM
   ld de, ZX0TempBuffer
   call DecompressZX0
@@ -3844,13 +3843,6 @@ LoadZX0ToVRAM:
   or c
   ret z
   jp -
-
-VRAMToDE:
-  ld a, e
-  out ($bf), a
-  ld a, d
-  out ($bf), a
-  ret
 .ends
 
 .section "VWF font renderer" free
@@ -3908,6 +3900,25 @@ DrawTextASCII:
   xor a
   ld (VWFCurrentTileIndex), a
   ld (VWFRemainingColumns), a
+  ret
+
+DrawTextASCII_XY:
+  ; Preserve VWFNextUnusedTile around the call
+  ld a, (VWFNextUnusedTile)
+  push af
+    ; hl = pointer to (address), (text) pairs, null terminated
+-:  ld a, (hl)
+    or a
+    jr z, +
+    ld e, a
+    inc hl ; Assume we are not across page boundaries here, as it's not GD3
+    ld d, (hl)
+    inc hl
+    call DrawTextASCII
+    inc hl
+    jr -
++:pop af
+  ld (VWFNextUnusedTile), a
   ret
 
 _unsupportedCharacter:
@@ -4059,16 +4070,18 @@ _flushTileToVRAM:
   ret z
   push hl
     ; VRAM address is $4000 + 32 * a
-    ; Might be a better way than this?
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    set 6, h
-    call VRAMToHL
+    ; Put it in d, then shift right by 3
+    ld d,a
+    ld e,0
+    srl d
+    rr e
+    srl d
+    rr e
+    srl d
+    rr e
+    ; Finally set the $4000 bit
+    set 6, d
+    rst VRAMToDE
     
     ld b, 8 ; Rows
     ld hl, VWFTileBuffer
@@ -4092,12 +4105,11 @@ _bitplane_loop:
         and c       ; Mask to bit of interest
         jr z, +     ; Skip if 0
         inc e       ; Else set LSB
-+:      ; hl += 8
-        push de
-          ld d, 0
-          ld e, 8
-          add hl, de
-        pop de
++:      ; hl += 8 ; inc hl x8 = 48
+        push de         ; 11
+          ld de, 8      ; 10
+          add hl, de    ; 11
+        pop de          ; 10 => 42
 
         djnz -
 
@@ -4117,7 +4129,7 @@ _bitplane_loop:
   
     ; Finally, write to the tilemap
     ld de, (VWFTilemapAddress)
-    call VRAMToDE
+    rst VRAMToDE
     inc de
     inc de
     ld a, (VWFCurrentTileIndex)
