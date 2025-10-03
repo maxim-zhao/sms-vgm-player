@@ -329,6 +329,7 @@ main:
   ld (IsPalConsole),a
   call IsJapanese
   ld (IsJapConsole),a
+  call CheckForLanguageOverride
   call HasFMChip
   ld (FMChipDetected),a
   xor a
@@ -3687,7 +3688,7 @@ WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
 .section "Get VCount" FREE
 ;==============================================================
 ; V Counter reader
-; Waits for 2 consecuitive identical values (to avoid garbage)
+; Waits for 2 consecutive identical values (to avoid garbage)
 ; Returns in a *and* b
 ;==============================================================
 GetVCount:  ; returns scanline counter in a and b
@@ -3738,13 +3739,13 @@ IsJapanese:
     in a,($dd)
     and  %11000000  ; See what the TH inputs are
     cp   %11000000  ; If the bits are not 1 then it's definitely Japanese
-    jp nz,_IsJap
+    jp nz,+
 
     ld a,%01010101  ; Set both TH to output and output 0s
     out ($3f),a
     in a,($dd)
     and %11000000  ; See what the TH inputs are
-    jp nz,_IsJap    ; If the bits are not 0 then it's definitely Japanese
+    jp nz,+        ; If the bits are not 0 then it's definitely Japanese
 
     ld a,%11111111  ; Set everything back to being inputs
     out ($3f),a
@@ -3752,9 +3753,26 @@ IsJapanese:
     xor a
     ret
 
-    _IsJap:
-    ld a,1
++:  ld a,1
     ret
+.ends
+
+.section "CheckForLanguageOverride" free
+CheckForLanguageOverride:
+  in a,($dc) ; PLayer 1 inputs
+  cpl ; so 1 = pressed
+  
+  cp %00110001 ; U+1+2 => Japanese
+  jr nz, +
+  ld a, 1
+  ld (IsJapConsole), a
+  ret
+  
++:cp %00110010 ; D+1+2 => Export
+  ret nz
+  xor a
+  ld (IsJapConsole), a
+  ret
 .ends
 
 .section "FM detection" FREE
