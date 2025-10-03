@@ -96,6 +96,8 @@ def convert(args):
     # Remove the skipped ones
     chars = [x for x in chars if x.codepoint // 256 not in skip]
     
+    print(f"Total character count: {len(chars)}")
+    
     # 7-8. Save lookup table
     # Plan:
     # 1. Split to 256 code point chunks
@@ -103,9 +105,6 @@ def convert(args):
     # 3. Compress these using ZX7 or similar
     # 4. At runtime, decode the needed chunk to RAM (for ASCII, this will only be needed once) and follow the trail.
     #    256 words + 256 8px wide chars = 2560 bytes, will be smaller sometimes
-    # TODO: try 512, 1024 code point chunks.
-    # More will require more RAM at runtime, and may be slower,
-    # but helps with compression.
     bucket_factor = 256
     #         ZX0   upkr    largest chunk
     #  256 -> 60230 56354   2000            -> easiest to handle in asm

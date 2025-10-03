@@ -109,9 +109,9 @@ smsvgmplayer-unicode.stub: smsvgmplayer-unicode.stub.o
 	echo $< >> linkfile-unicode
 	$(WLALINK) -d -r -v -S linkfile-unicode $@
 
-%.sms: % smsvgmplayer.stub
-	copy /y /b smsvgmplayer.stub+$<+smsvgmplayer.stub+smsvgmplayer.stub $@
-	copy /y smsvgmplayer.sym $@.sym
+%.sms: % smsvgmplayer-unicode.stub
+	copy /y /b smsvgmplayer-unicode.stub+$< $@
+	copy /y smsvgmplayer-unicode.sym $@.sym
 
 clean:
 	del art\*.zx0

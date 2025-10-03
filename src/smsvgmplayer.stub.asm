@@ -128,7 +128,6 @@ IsPalConsole                    db
 IsJapConsole                    db
 FMChipDetected                  db
 FMChipEnabled                   db
-VBlankRoutine                   dw
 VisRoutine                      dw ; Routine to calculate vis
 VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
 VisChanged                      db ; Flag to signal that the vis needs to be initialised
@@ -187,9 +186,10 @@ GetByte:
   ; bc is >$cx (presuming this is the only place it is changed)
   ; so flip to the next page
   push af
-    ld a,(PAGING_SLOT_2)
+    ld a,(VGMDataPage)
     inc a
     call z,VGMStop ; give up at page $100(!)
+    ld (VGMDataPage), a
     ld (PAGING_SLOT_2),a
     ld b,$80 ; wrap to $8000
   pop af
@@ -210,13 +210,15 @@ VRAMToDE:
 ;==============================================================
 ; Interrupt handler
 ;==============================================================
-.section "!Interrupt handler" FORCE
+.section "Interrupt handler" force
+InterruptHandler:
+  ; Shadow registers for interrupts routine...
+  ; ...although we don't rely on them retaining their values
   ex af,af'
   exx
     in a,($bf)      ; satisfy interrupt
     ; No checking of the value because I know I only have VBlank interrupts
-    ld hl,(VBlankRoutine)
-    call callHL
+    call VGMPlayerVBlank
   exx
   ex af,af'
   ei
@@ -231,27 +233,31 @@ NoVBlank:
 
 .section "VGM Player vblank" free
 VGMPlayerVBlank:
-  SetDebugColour(0,1,0) ; Dark green
-  call VGMUpdate      ; Read/handle sound data
-  SetDebugColour(1,0,0) ; Dark red
-  call CheckInput ; Read input into memory
-  call ShowTime   ; Update time display
-  call ShowLoopNumber
-  SetDebugColour(2,0,0) ; Medium red
+  ld a, ($ffff)
+  push af
+    SetDebugColour(0,1,0) ; Dark green
+    call VGMUpdate      ; Read/handle sound data
+    SetDebugColour(1,0,0) ; Dark red
+    call CheckInput ; Read input into memory
+    call ShowTime   ; Update time display
+    call ShowLoopNumber
+    SetDebugColour(2,0,0) ; Medium red
 
-  ld a,(PaletteChanged)
-  or a
-  call nz,NextPalette ; Try to get CRAM dots in VBlank
+    ld a,(PaletteChanged)
+    or a
+    call nz,NextPalette ; Try to get CRAM dots in VBlank
 
-  ld a,(VisChanged)
-  or a
-  call nz,InitialiseVis ; If the vis has changed then I need to do the initialisation in the vblank
-
-  ld hl,(VisDisplayRoutine)   ; Draw vis
-  SetDebugColour(3,0,0) ; Bright red
-  call callHL
-  SetDebugColour(0,0,0) ; All done
-
+    ld a, (VisChanged)
+    or a
+    jr nz, +
+    ; Only update vis if not in the process of changing
+    ld hl,(VisDisplayRoutine)   ; Draw vis
+    SetDebugColour(3,0,0) ; Bright red
+    call callHL
++:
+    SetDebugColour(0,0,0) ; All done
+  pop af
+  ld ($ffff), a
   ret
 .ends
 
@@ -291,8 +297,6 @@ main:
   ld a,VGMSTARTPAGE
   ld (PAGING_SLOT_2),a
 
-  call TurnOffScreen
-  
   ; Black palette
   xor a
   out ($bf),a
@@ -303,11 +307,7 @@ main:
 -:out ($be),a
   djnz -
 
-  ; Load VDP with default values, thanks to Mike G :P
-  ; hl = address of data
-  ; b = size of data
-  ; c = port
-  ; otir = while (b>0) do {out (hl),c; b--}
+  ; Initialise VDP registers
   ld hl,VDPRegisterInitData
   ld b,_sizeof_VDPRegisterInitData
   ld c,$bf
@@ -343,7 +343,7 @@ main:
   ; Load palette
   ld hl,PaletteData
   ld b,_sizeof_PaletteData
-  ld c,0
+  ld a,0
   call LoadPalette
 
   ; Draw screen
@@ -419,30 +419,40 @@ main:
 
   call InitialiseVis
 
-  ; Set VBlank routine
-  ld hl,VGMPlayerVBlank
-  ld (VBlankRoutine),hl
-
   ; Turn screen on
-  ld a,(VDPRegister81Value)
-  or %01000000
-  ld (VDPRegister81Value),a
-  out ($bf),a
-  ld a,$81
-  out ($bf),a
+  call TurnOnScreen
 
   ; Fake a VBlank to initialise various stuff
   call VGMPlayerVBlank
 
+  ; Finally, enable VDP frame interrupts
+  ld a,(VDPRegister81Value)
+  or %00100000
+  ld (VDPRegister81Value),a
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
+  ; And CPU interrupts
   ei
+
 InfiniteLoop:   ; to stop the program
   halt
   SetDebugColour(0,2,0) ; Medium green
   call ProcessInput   ; Process input from the last VBlank
-  SetDebugColour(0,3,0) ; Bright green
+
+  SetDebugColour(3,3,0) ; Bright yellow = vis init
+  ld a,(VisChanged)
+  or a
+  call nz,InitialiseVis ; If the vis has changed then I need to do the initialisation
+
+  SetDebugColour(0,3,0) ; Bright green = vis processing
   ld hl,(VisRoutine)  ; Vis processing
   call callHL
   SetDebugColour(0,0,0)
+
+  ; Clear the vis changed flag only after an initialisation and process have both completed
+  xor a
+  ld (VisChanged),a
 
   jr InfiniteLoop
 
@@ -566,8 +576,9 @@ MoveHLForwardByA:
 MoveHLForward:
   ; Adds 1 to HL
   ; If it goes to $c000, it handles the paging
-  inc hl
+  ; Preserves AF
   push af
+    inc hl
     ld a, h
     cp $c0  ; Is it c?
     jr nz,+
@@ -641,6 +652,11 @@ NoTagString:
 
 _DrawGd3StringForRegion:
   ; hl points to the strings, null-separated
+  ; We want to draw:
+  ; - English if English is present and system is Export
+  ; - Japanese if Japanese is present and system is Japanese
+  ; - The other one if the preferred language is not present
+  ; We leave hl pointing after both strings in all cases
   push hl ; preserve current pointer (to English string)
     ld a, (hl)
     call MoveHLForward
@@ -671,7 +687,7 @@ _DrawGd3StringForRegion:
     or (hl)
     jr z, + ; No Japanese, try English
     ; Else use it
-    inc hl
+    dec hl
     call _DrawGD3String
     jr -
     
@@ -886,10 +902,12 @@ UpdatePalette:
   add hl,bc
 
   ld b,3      ; main palette
-  ld c,4
-  call LoadPalette
+  ld a,4
+  push hl
+    call LoadPalette
+  pop hl
   ld b,1      ; border colour
-  ld c,16
+  ld a,16
   call LoadPalette
 
   ; reset flag
@@ -904,7 +922,8 @@ UpdatePalette:
 .section "VGM routines" free
 ; VGM routines memory mapping:
 .enum VGMMemoryStart export
-VGMCounterLocation      dw      ; VGM data pointer
+VGMDataPointer          dw      ; VGM data pointer
+VGMDataPage             db      ; Page number
 VGMWaitTotal            dw      ; Wait length total
 VGMFrameLength          dw      ; Amount to wait per frame (allows fast-forwarding :P)
 VGMLoopPage             db      ; Loop point page
@@ -1124,7 +1143,9 @@ _Stop:
 
     ; Move pointer to the start of the VGM data
     ld hl,(VGMStartOffset)
-    ld (VGMCounterLocation),hl
+    ld (VGMDataPointer),hl
+    ld a, (VGMStartPage)
+    ld (VGMDataPage), a
 
     ; Set various stuff to initial values:
     ld hl,$0000
@@ -1277,6 +1298,7 @@ _NoLooping:
     jr _EndVGMDoLoop
 
 _IsLooping:
+    ld (VGMDataPage), a
     ld (PAGING_SLOT_2),a            ; Page
     ld bc,(VGMLoopOffset)   ; offset
     ld a,(VGMLoopsPlayed)
@@ -1294,12 +1316,15 @@ VGMUpdate:
   push bc     ; data location - change to ix?
   push de     ; general use
   push hl     ; wait total
-
     ld a,(VGMPlayerState)       ; see what state we're in
     and VGMPlaying
     jp z,EndGetDataLoop         ; if we're not playing then exit
-
-    ld bc,(VGMCounterLocation)  ; find where I'm looking
+    
+    ; Restore paging
+    ld a, (VGMDataPage)
+    ld (PAGING_SLOT_2), a
+    
+    ld bc,(VGMDataPointer)      ; find where I'm looking
     ld hl,(VGMWaitTotal)        ; get the current amount to wait
     jp DoINeedToWait            ; in case a wait has been left over
 
@@ -1417,7 +1442,7 @@ DataBlock:
       ; hlde = block size
       ; we need to skip it
       ; save bc for now
-      ld (VGMCounterLocation),bc
+      ld (VGMDataPointer),bc
       ; get de into bc so I can divide
       ld b,d
       ld c,e
@@ -1427,7 +1452,7 @@ DataBlock:
       ; figure out the new location
       ld d,b
       ld e,c
-      ld bc,(VGMCounterLocation)
+      ld bc,(VGMDataPointer)
       add hl,bc ; can't overflow, bc<$c000 and hl<$4000
       ; if the answer is >$c000 then we need to subtract $4000 and add one page
       ld a,h
@@ -1706,7 +1731,7 @@ DoINeedToWait:
       ld (VGMTimeMins),a
 +:  pop hl
     ; and exit to wait for the next vblank
-    ld (VGMCounterLocation),bc
+    ld (VGMDataPointer),bc
     jr EndGetDataLoop
 
 NoWait:
@@ -1792,9 +1817,7 @@ NextVis:
 NoRoutine:
   ret
 
-InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
-    call NoSprites
-
+InitialiseVis:    ; Per-routine initialisation
     ld a,(VisNumber)
     ; Check range
     cp NumVisRoutines
@@ -1821,30 +1844,6 @@ InitialiseVis:    ; Per-routine initialisation (runs in VBlank)
     ld h,(ix+VisData.ProcessFunction+1)
     ld l,(ix+VisData.ProcessFunction+0)
     ld (VisRoutine),hl
-
-    xor a
-    ld (VisChanged),a
-    ret
-
-UpdateVis:
-    push hl
-    push af
-    push de
-        ld a,(VisNumber)
-        sla a       ; multiply by 2
-        ld hl,VisRoutines
-        ld d,$00
-        ld e,a
-        add hl,de   ; hl = address of address of routine
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        push de
-        pop hl
-        call callHL ; jump to address
-    pop de
-    pop af
-    pop hl
     ret
 .ends
 
@@ -1862,7 +1861,8 @@ ClearBuffer:   ; uses a,bc,de,hl
 
 DrawVisBufferAsBars:
 ; Draw first 32 entries of VisBuffer as vertical bars of height == value
-    ld de,VisLocation
+  ld de,VisLocation
+  di
     rst VRAMToDE
     ld c,4      ; Number of rows
 --: ; Draw line
@@ -1893,30 +1893,35 @@ _LessThan8:
     djnz -
     dec c
     jr nz,--
-    ret
+  ei
+  ret
     
 BlankVisArea:
   ; Blank vis area
   ld de,VisLocation
-  rst VRAMToDE
-  ld b,32*5
--:ld a, <TileIndex_Background ; Blank tile is here
-  out ($be),a
-  nop
-  nop
-  ld a, >TileIndex_Background
-  out ($be),a
-  djnz -
+  di
+    rst VRAMToDE
+    ld b,32*5
+-:  ld a, <TileIndex_Background ; Blank tile is here
+    out ($be),a
+    nop
+    nop
+    ld a, >TileIndex_Background
+    out ($be),a
+    djnz -
+  ei
   ret
   
 NormalTilemap:
   ld de,$8200 | %11110001 | (TilemapBaseAddress >> 10)
-  rst VRAMToDE
-  ; No scrolling
-  ld de,$8800
-  rst VRAMToDE
-  ld de,$8900
-  rst VRAMToDE
+  di
+    rst VRAMToDE
+    ; No scrolling
+    ld de,$8800
+    rst VRAMToDE
+    ld de,$8900
+    rst VRAMToDE
+  ei
   ret
 .ends
 
@@ -2105,11 +2110,12 @@ _FMNoteThresholds:
 
 .section "Volume bars vis" free
 VolumeVisString:
-  TextWithAddress  3, 16, "Tone 1"
-  TextWithAddress 11, 16, "Tone 2"
-  TextWithAddress 19, 16, "Tone 3"
-  TextWithAddress 27, 16, "Noise"
+  TextWithAddress  2, 16, "Tone 1"
+  TextWithAddress 10, 16, "Tone 2"
+  TextWithAddress 18, 16, "Tone 3"
+  TextWithAddress 26, 16, "Noise"
 .db 0
+
 InitVolumeVis:
   call UpdatePalette
   call NormalTilemap
@@ -2177,23 +2183,24 @@ InitPianoVis:
     call ClearBuffer
     ; Draw tiles
     ld de,VisLocation
-    rst VRAMToDE
-    ld hl,PianoTileNumbers
-    ; We may run into the active display so output it slower than otir
-    ld c,$be
-    ld b,64*2
--:  outi
-    jr nz, -
-    ; draw 2 blank lines
-    ld b,32*2
--:  ld a, <TileIndex_Background
-    out ($be),a
-    nop
-    nop
-    ld a, >TileIndex_Background
-    out ($be),a
-    djnz -
-    
+    di
+      rst VRAMToDE
+      ld hl,PianoTileNumbers
+      ; We may run into the active display so output it slower than otir
+      ld c,$be
+      ld b,64*2
+-:    outi
+      jr nz, -
+      ; draw 2 blank lines
+      ld b,32*2
+-:    ld a, <TileIndex_Background
+      out ($be),a
+      nop
+      nop
+      ld a, >TileIndex_Background
+      out ($be),a
+      djnz -
+    ei
     ret
 
 PianoVisMinValsPSG:
@@ -2563,7 +2570,8 @@ _bigHands:
     inc hl        ;  7
     nop           ;  4
     nop           ;  4
-    out ($be),a   ; 11 -> 26 total
+    nop           ;  4
+    out ($be),a   ; 11 -> 30 total
     djnz -        ; 13
 
     ; Terminate sprite table
@@ -2621,11 +2629,6 @@ InitNoVis:
 .ende
 ; So now I can traverse the byte-sized tables with XSpeed at Y+NumSnowFlakes,
 ; and XN at AngleSpeed-NumSnowFlakes*2
-SnowText:
-.db "\n"
-.db "  Dancing snow...\n"
-.db "\n"
-.db "              ...with flashing",0
 
 InitSnowVis:
   call UpdatePalette
@@ -2639,16 +2642,13 @@ InitSnowVis:
   ld a,(VDPRegister81Value)
   and %11111101
   ld (VDPRegister81Value),a
-  out ($bf),a
-  ld a,$81
-  out ($bf),a
+  di
+    out ($bf),a
+    ld a,$81
+    out ($bf),a
+  ei
   
   call BlankVisArea
-
-  ; Fill vis area with my text
-  ld hl,SnowText
-  ld de,VisLocation
-  ;call DrawTextASCII
 
   ; Fill buffer with initial spaced Ys
   xor a
@@ -2776,7 +2776,23 @@ ProcessSnowVis:
   ret
         
 DrawSnowVis:
-  ; Noise flashing
+  ; Emit to sprite table
+  ld de,SpriteTableBaseAddress|$4000
+  rst VRAMToDE
+  ld hl,SnowflakeYs
+  ld b,NumSnowFlakes*2 ; because outi + djnz will double-decrement b
+  ld c,$be
+-:outi ; 16
+  djnz - ; 13 -> 29 cycles. otir is too fast!
+
+  ld de,(SpriteTableBaseAddress+128)|$4000
+  rst VRAMToDE
+  ld b,<(NumSnowFlakes*2*2)
+  ld hl,SnowflakeXNs
+-:outi
+  djnz -
+
+  ; Noise flashing - do this last to push CRAM dots lower
   ld a,(VGMPSGVolumes+3)
   cpl
   and $0f
@@ -2795,21 +2811,6 @@ DrawSnowVis:
   ld a,c        ; data
   out ($be),a
 
-  ; Emit to sprite table
-  ld de,SpriteTableBaseAddress|$4000
-  rst VRAMToDE
-  ld hl,SnowflakeYs
-  ld b,NumSnowFlakes*2 ; because outi + djnz will double-decrement b
-  ld c,$be
--:outi ; 16
-  djnz - ; 13 -> 29 cycles. otir is too fast!
-
-  ld de,(SpriteTableBaseAddress+128)|$4000
-  rst VRAMToDE
-  ld b,<(NumSnowFlakes*2*2)
-  ld hl,SnowflakeXNs
--:outi
-  djnz -
   ret
 
 GetRandomNumber:
@@ -3192,6 +3193,23 @@ RandomPalette:
   ret
 
 DrawLogoVis:
+  ; Update scroll registers
+  ld a,(LogoXHi)
+  ld e,a
+  ld d,$88
+  rst VRAMToDE
+  ; We invert the scroll compared to the Y value. This is to try to make the maths easier above.
+  ld a,(LogoYHi)
+  neg
+  sub 256-224
+  ld e,a
+  ld d,$89
+  rst VRAMToDE
+  
+  ; Delay palette update to make it offscreen
+  ld b, 0
+-:djnz -
+  
   ld de,$c00a ; Logo colours
   rst VRAMToDE
   ; We emit 5-LogoBrightnessSmoothed blacks...
@@ -3218,18 +3236,7 @@ DrawLogoVis:
   
 +:; Done
 
-  ; Update scroll registers
-  ld a,(LogoXHi)
-  ld e,a
-  ld d,$88
-  rst VRAMToDE
-  ; We invert the scroll compared to the Y value. This is to try to make the maths easier above.
-  ld a,(LogoYHi)
-  neg
-  sub 256-224
-  ld e,a
-  ld d,$89
-  jp VRAMToDE
+  ret
 .ends
 
 ;==============================================================
@@ -3245,7 +3252,7 @@ VDPRegisterInitData:
 ;    ||`------ Blank leftmost column for scrolling
 ;    |`------- Fix top 2 rows during horizontal scrolling
 ;    `-------- Fix right 8 columns during vertical scrolling
-.db %10100000,$81
+.db %10000000,$81
 ;     ||||||`- Zoomed sprites -> 16x16 pixels
 ;     |||||`-- Doubled sprites -> 2 tiles per sprite, 8x16
 ;     ||||`--- Mode5 bit on PBC - must be 0
@@ -3266,9 +3273,6 @@ VDPRegisterInitData:
 ;    ``------- Line interrupt spacing ($ff to disable)
 
 
-;==============================================================
-; My chosen palette
-;==============================================================
 PaletteData:
 .incbin "art\big-numbers.palette"
 .db 0 ; black border
@@ -3535,26 +3539,24 @@ ClearVRAM:
 
 .section "Turn off screen" FREE
 TurnOffScreen:
-    push af
-        ld a,(VDPRegister81Value)
-        and %10111111
-        ld (VDPRegister81Value),a
-        out ($bf),a
-        ld a,$81
-        out ($bf),a
-    pop af
-    ret
+  ld a,(VDPRegister81Value)
+  and %10111111
+  ld (VDPRegister81Value),a
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
+  ret
 
 TurnOnScreen:
-    push af
-        ld a,(VDPRegister81Value)
-        or %01000000
-        ld (VDPRegister81Value),a
-        out ($bf),a
-        ld a,$81
-        out ($bf),a
-    pop af
-    ret
+  ld a,(VDPRegister81Value)
+  or %01000000
+  ld (VDPRegister81Value),a
+  out ($bf),a
+  ld a,$81
+  out ($bf),a
+  ret
+  
+  
 .ends
 
 ;==============================================================
@@ -3567,9 +3569,11 @@ NoSprites:
     push af
     push de
         ld de,SpriteTableBaseAddress|$4000
-        rst VRAMToDE
-        ld a,$d0
-        out ($be),a
+        di
+          rst VRAMToDE
+          ld a,$d0
+          out ($be),a
+        ei
     pop de
     pop af
     ret
@@ -3580,23 +3584,20 @@ NoSprites:
 ; Parameters:
 ; hl = location
 ; b  = number of values to write
-; c  = palette index to start at (<32)
+; a  = palette index to start at (<32)
 ;==============================================================
 .section "Palette loader" FREE
 LoadPalette:
-    push af
-    push bc
-    push hl
-        ld a,c
-        out ($bf),a     ; Palette index
-        ld a,$c0
-        out ($bf),a     ; Palette write identifier
-        ld c,$be
-        otir            ; Output b bytes starting at hl to port c
-    pop hl
-    pop bc
-    pop af
-    ret
+  di
+    out ($bf),a     ; Palette index
+    ld a,$c0
+    out ($bf),a     ; Palette write identifier
+    ld c,$be
+    ; We may be running during active display, so otir is too fast...
+-:  outi
+    jr nz, -
+  ei
+  ret
 .ends
 
 .section "Hex to BCD" FREE
@@ -3795,26 +3796,30 @@ HasFMChip:
 .bank 0 slot 0
 .section "ZX0 art shims" free
 LoadZX0ToVRAM:
-  rst VRAMToDE
-  ; Decompress to RAM
-  ld de, ZX0TempBuffer
-  call DecompressZX0
-  ; de points at the end of data
-  ; compute bc = length
-  ld hl, $10000 - ZX0TempBuffer
-  add hl, de
-  ld b, h
-  ld c, l
+  push de
+    ; Decompress to RAM
+    ld de, ZX0TempBuffer
+    call DecompressZX0
+    ; de points at the end of data
+    ; compute bc = length
+    ld hl, $10000 - ZX0TempBuffer
+    add hl, de
+    ld b, h
+    ld c, l
+  pop de
   ; Then copy to VRAM
-  ld hl, ZX0TempBuffer
--:ld a, (hl)
-  out ($be), a
-  inc hl
-  dec bc
-  ld a, b
-  or c
-  ret z
-  jp -
+  di
+    rst VRAMToDE
+    ld hl, ZX0TempBuffer
+-:  ld a, (hl)
+    out ($be), a
+    inc hl
+    dec bc
+    ld a, b
+    or c
+    jp nz, -
+  ei
+  ret
 .ends
 
 .section "VWF font renderer" free
@@ -3923,7 +3928,7 @@ _DrawUnicodeCharacter:
   ld a, (hl) ; Width
   ; Check for zero
   or a
-  jr z,  _unsupportedCharacter
+  jr z, _unsupportedCharacter
   ld b, a ; b = number of columns to draw
   inc hl
   ld a, (hl) ; Offset
@@ -4032,6 +4037,12 @@ _noMoreTiles:
     ; We clear this so we won't flush any more
     xor a
     ld (VWFCurrentTileIndex), a
+    ; We also want to clear the buffer
+    ld hl, VWFTileBuffer
+    ld de, VWFTileBuffer+1
+    ld bc, _sizeof_VWFTileBuffer - 1
+    ld (hl), 4 ; Background colour
+    ldir
     ; Then continue on as if everything is fine...
     jr -
   
@@ -4056,65 +4067,67 @@ _flushTileToVRAM:
     rr e
     ; Finally set the $4000 bit
     set 6, d
-    rst VRAMToDE
-    
-    ld b, 8 ; Rows
-    ld hl, VWFTileBuffer
+    di
+      rst VRAMToDE
+      
+      ld b, 8 ; Rows
+      ld hl, VWFTileBuffer
 
 _row_loop:
-    push bc
-    push hl
-      ; For the current row, we will generate all 4 bitplane bytes.
-
-      ;ld b, 4 ; Bitplanes
-      ;ld c, %0001 ; Bitmask for bitplane 0
-      ld bc, $0401 ; faster version
-
-_bitplane_loop:
       push bc
       push hl
-        ld e, 0 ; Accumulator
-        ld b, 8 ; Number of bits to accumulate
+        ; For the current row, we will generate all 4 bitplane bytes.
 
--:      sla e
-        ld a, (hl)  ; Get pixel nibble
-        and c       ; Mask to bit of interest
-        jr z, +     ; Skip if 0
-        inc e       ; Else set LSB
-+:      ; Move hl on by 8
-        ; inc hl x8 = 48 cycles
-        ; push de / ld de, 8 / add hl, de / pop de = 42 cycles
-        ; If we assume hl does not cross a multiple of 256...
-        ld a, 8
-        add l
-        ld l, a     ; 15 cycles
+        ;ld b, 4 ; Bitplanes
+        ;ld c, %0001 ; Bitmask for bitplane 0
+        ld bc, $0401 ; faster version
 
-        djnz -
+_bitplane_loop:
+        push bc
+        push hl
+          ld e, 0 ; Accumulator
+          ld b, 8 ; Number of bits to accumulate
 
-        ; We have a byte, so we can emit it
-        ld a, e
-        out ($be), a
+-:        sla e
+          ld a, (hl)  ; Get pixel nibble
+          and c       ; Mask to bit of interest
+          jr z, +     ; Skip if 0
+          inc e       ; Else set LSB
++:        ; Move hl on by 8
+          ; inc hl x8 = 48 cycles
+          ; push de / ld de, 8 / add hl, de / pop de = 42 cycles
+          ; If we assume hl does not cross a multiple of 256...
+          ld a, 8
+          add l
+          ld l, a     ; 15 cycles
+
+          djnz -
+
+          ; We have a byte, so we can emit it
+          ld a, e
+          out ($be), a
+
+        pop hl
+        pop bc
+        sla c ; Shift bitmask left
+        djnz _bitplane_loop ; repeat for 4 bitplanes, with the same source data (hl)
 
       pop hl
       pop bc
-      sla c ; Shift bitmask left
-      djnz _bitplane_loop ; repeat for 4 bitplanes, with the same source data (hl)
-
-    pop hl
-    pop bc
-    inc hl ; New start byte is +1 from the start
-    djnz _row_loop          ; Loop until all 8 rows are done
+      inc hl ; New start byte is +1 from the start
+      djnz _row_loop          ; Loop until all 8 rows are done
   
-    ; Finally, write to the tilemap
-    ld de, (VWFTilemapAddress)
-    rst VRAMToDE
-    inc de
-    inc de
-    ld a, (VWFCurrentTileIndex)
-    out ($be), a
-    ld (VWFTilemapAddress), de
-    xor a
-    out ($be), a
+      ; Finally, write to the tilemap
+      ld de, (VWFTilemapAddress)
+      rst VRAMToDE
+      inc de
+      inc de
+      ld a, (VWFCurrentTileIndex)
+      out ($be), a
+      ld (VWFTilemapAddress), de
+      xor a
+      out ($be), a
+    ei
   pop hl
   ret
 
