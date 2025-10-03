@@ -4,37 +4,31 @@
 ; VRAM mapping stuff
 ; We have:
 ; $0000 +-------------------------------------------+
-;       | Unused tile 0                          1t |
-; $0020 +-------------------------------------------+
-;       | VWF font drawing area for 199 tiles  199t |
-; $1800 +----------------+--------------------------+
-;       | Tilemap for VGM logo vis              56t |
-; $1f00 +-------------------------------------------+
-;         (256 unused bytes = 8 tiles)           8t
-; $2000 +-------------------------------------------+
-;       | Background art                       112t |
-; $2e00 +-------------------------------------------+
+;       | Background art                       190t |
+; $17c0 +-------------------------------------------+
 ;       | Large numbers                         32t |
-; $3200 +-------------------------------------------+
+; $18c0 +-------------------------------------------+
 ;       | Small numbers                         10t |
 ; $3340 +----------+----------+----------+----------+
 ;       | Snow  4t | Scale    | Piano    | Logo     |
-; $33c0 +----------+       9t | + hands  |          |
-; $3460            +----------+      18t |          |
-; $3580                       +----------+      33t |
-; $3760                                  +----------+
-;         (160 unused bytes = 5 tiles)           5t
+; $1d80 +----------+       9t | + hands  |          |
+; $1e20            +----------+      18t |          |
+; $1f40                       +----------+      33t |
+; $2120                                  +----------+
+; $2200 +-------------------------------------------+
+;       | VWF font drawing area for 112 tiles  112t |
+; $3000 +-------------------------------------------+
+;       | Tilemap for VGM logo vis              56t |
+; $3700 +-------------------------------------------+
+;         Unused space ($100)                    8t
 ; $3800 +-------------------------------------------+
 ;       | Tilemap                               56t |
 ; $3f00 +-------------------------------------------+
 ;       | Sprite table                           8t |
 ; $4000 +-------------------------------------------+
-; Currently using 67 tiles for text
-; + 31 * 4 for VGM tags = 195
-; No room for more!
 
-.define SpriteSet               1       ; 0 for sprites to use tiles 0-255, 1 for 256+
-.define TilemapBaseAddressForLogo $1800
+.define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
+.define TilemapBaseAddressForLogo $3000
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
@@ -376,10 +370,6 @@ main:
   ld (hl), a
   ldir
   
-  ld hl,TitleText
-  ld de, TilemapAddress(2, 1)
-  call DrawTextASCII_XY
-  
   ; Initial button state values (all off)
   ld a,$ff
   ld (LastButtonState),a
@@ -456,18 +446,6 @@ InfiniteLoop:   ; to stop the program
   ld (VisChanged),a
 
   jr InfiniteLoop
-
-.section "Text" free
-TitleText:
-  TextWithAddress  2,  1, "SMS VGM Player v2.1"
-  TextWithAddress  6,  2, "by Maxim"
-  TextWithAddress  2,  4, "Time"
-  TextWithAddress 13,  4, "Loop"
-  TextWithAddress  2,  9, "Total"
-  TextWithAddress  2, 10, "Loop"
-  TextWithAddress  2, 23, "https://www.smspower.org/Music/VGMs"
-.db 0
-.ends
 
 ;==============================================================
 ; VGM offset to SMS offset convertor
@@ -923,6 +901,8 @@ UpdatePalette:
 .section "VGM routines" free
 ; VGM routines memory mapping:
 .enum VGMMemoryStart export
+VGMStartPage            db      ; Start point page
+VGMStartOffset          dw      ; Start point offset when paged in
 VGMDataPointer          dw      ; VGM data pointer
 VGMDataPage             db      ; Page number
 VGMWaitTotal            dw      ; Wait length total
@@ -939,9 +919,7 @@ VGMPSGTones             dsb 6   ; PSG tone values
 VGMPSGTone1stByte       db      ; PSG tone first byte
 VGMPSGNoiseMode         db      ; PSG noise mode in low 3 bits
 VGMWaitTotalOverflow    db      ; Kludgy :/
-VGMYM2413Registers      dsb $38 ; Just the registers, analyse yourself :)
-VGMStartPage            db      ; Start point page
-VGMStartOffset          dw      ; Start point offset when paged in
+VGMYM2413Registers      dsb $39 ; Just the registers, analyse yourself :)
 .ende
 
 ; Numbers for VGMPlayerState
@@ -1166,12 +1144,11 @@ _Stop:
     ld (VGMPSGVolumes+2),hl
 
     ld hl,VGMYM2413Registers    ; Zero registers
+    ld de,VGMYM2413Registers+1
     xor a
-    ld c,$38
-  -:ld (hl),a
-    inc hl
-    dec c
-    jr nz,-
+    ld (hl),a
+    ld bc,_sizeof_VGMYM2413Registers-1
+    ldir
   pop af
   pop hl
   call MuteAllSound
@@ -1259,19 +1236,25 @@ VGMPlayPause:
   push af
     ld a,(VGMPlayerState)
     cp VGMPlaying   ; if it's playing then pause
-    call z,_Pause
-    cp VGMPaused    ; if it's paused then play
+    jr nz, +
+    call _Pause
+    jr ++
+    
++:  cp VGMPaused    ; if it's paused then play
     jr nz,+
     call RestoreVolumes
     call _Play
-  +:cp VGMStopped   ; if it's stopped then play from the start
+    jr ++
+    
++:  cp VGMStopped   ; if it's stopped then play from the start
     call z,_Play
+++:
   pop af
   ret
 
 ; Stop playback
 VGMStop:
-  call _Stop
+  jp _Stop
   ret
 
 ; Toggle 4x speed
@@ -3289,9 +3272,7 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Blank               db
-TileIndex_VWF_Start           dsb 255
-TileIndex_Background          dsb 112
+TileIndex_Background          dsb 190
 TileIndex_BigNumbers          dsb 32
 TileIndex_SmallNumbers        dsb 10
 .union ; Vis tiles shared area
@@ -3305,6 +3286,7 @@ TileIndex_SmallNumbers        dsb 10
 .nextu
   TileIndex_Sprite_Snow       dsb 4
 .endu
+TileIndex_VWF_Start           dsb 255
 .ende
 
 .macro TileMapFilter
@@ -4017,9 +3999,7 @@ _drawColumn:
 _getNextAvailableTile:
   push de
     ; If we have finished a tile, flush it to VRAM
-    ld a, (VWFCurrentTileIndex)
-    or a
-    call nz, _flushTileToVRAM
+    call _flushTileToVRAM
     ; Decrement the counter
     ld hl, VWFTileCount
     ld a, (hl)
@@ -4073,11 +4053,12 @@ _flushTileToVRAM:
   or a
   ret z
   push hl
-    ; VRAM address is $4000 + 32 * a
+    ; VRAM address is $4000 + 32 * (a + 256)
     ; Put it in d, then shift right by 3
     ld d,a
     ld e,0
-    srl d
+    scf
+    rr d
     rr e
     srl d
     rr e
@@ -4143,7 +4124,7 @@ _bitplane_loop:
       ld a, (VWFCurrentTileIndex)
       out ($be), a
       ld (VWFTilemapAddress), de
-      xor a
+      ld a, 1
       out ($be), a
     ei
   pop hl
