@@ -43,8 +43,9 @@ class CharacterInfo:
         bbox = self.img.getbbox()
         if bbox:
             self.img = self.img.crop((bbox[0], 0, bbox[2], 8))
-    # TODO: try drawing at a smaller height if it's too tall,
-    # or offset if it's out of bounds?
+        else:
+            # Image is blank, so make it a space
+            self.img = Image.new('1', (2, 8), 0)
 
 
 def convert(args):
@@ -82,7 +83,6 @@ def convert(args):
                 cp = CharacterInfo(32, font, offset, 8)
                 # Rewrite it
                 cp.img = Image.new('1', (2, 8), 0)
-                cp.width = 2
                 codepoints[32] = cp
                 
             for (codepoint, name) in get_font_codepoints(arg):
@@ -96,7 +96,9 @@ def convert(args):
     # Remove the skipped ones
     chars = [x for x in chars if x.codepoint // 256 not in skip]
     
-    print(f"Total character count: {len(chars)}")
+    width = sum([x.img.width for x in chars])
+    maxwidth = max([x.img.width for x in chars])
+    print(f"Total character count: {len(chars)}. Pixel width: {width}. Max width: {maxwidth}")
     
     # 7-8. Save lookup table
     # Plan:
