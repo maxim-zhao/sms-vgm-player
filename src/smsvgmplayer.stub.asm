@@ -29,6 +29,46 @@
 ;       | Sprite table                           8t |
 ; $4000 +-------------------------------------------+
 
+; For the font, we have 7467 characters, 51491px of data
+; (average just under 7px each). But the coverage of
+; Unicode is very sparse, so we need a way to know for 
+; a given char (1) do we have it, (2) where is its data
+; and (3) how wide is it.
+; Approach 1:
+; 1. Split Unicode into 256-byte ranges. 102 are present.
+; 2. First table has index, page + offset for each occupied range.
+;    -> 4 * 102 = 198 bytes, plus terminator = 199 bytes
+; 3. Each is then decompressed to RAM -> 40-50% space saved
+; 4. This chunk contains 256x
+;    byte width: 0 = no data
+;    word offset to data: 0 = no data
+;    => 3 * 256 = 768 bytes, but quite compressible
+;    followed by the bits themselves.
+;    We could save bytes here by instead having just the widths,
+;    and imply the offset by counting, but that means summing
+;    all 256 entries for every char.
+; This means we 
+; - take 51491 bytes of raw unindexed data
+; - add 12800 bytes of index
+; - compress this to 63714 bytes in a semi-seekable way
+; - add 199 bytes of lookup data
+; Approach 2: if trying to minimize the data size
+; 1. Chunk to 256 again
+; 2. In each chunk, it's just the raw data, each prefixed by the width
+;    -> 7467 widths for actual data + 18645 zeroes for missing chars
+;    -> compress these
+;    -> 50425 bytes, still not much compression
+; Approach 3: binary search
+; 1. Make a table with, for each char:
+;    - Codepoint (2B)
+;    - Offset within the raw data (2B)
+;    -> 30KB table :(
+; Approach 4: prefix each chunk with the lengths in a table
+; Format                        Size in bytes   Total CPU cycles for DrawGD3Tag
+; (width, offset)x256, data     63707           5746277
+; widthx256                     49111           6220999
+; optimized a bit with alignment                6087267
+
 .define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
 .define TilemapBaseAddressForLogo $3000
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
@@ -37,7 +77,7 @@
 ;.define Debug
 
 .ifdef UNICODE
-.define VGMSTARTPAGE 5
+.define VGMSTARTPAGE 4
 .else
 .ifdef Debug
 .define VGMSTARTPAGE 2 ; more space needed for debug code
@@ -53,6 +93,8 @@ slotsize $4000
 slot 0 $0000
 slot 1 $4000
 slot 2 $8000
+slotsize $2000
+slot 3 $c000 ; RAM
 .endme
 
 .rombankmap
@@ -116,7 +158,7 @@ SDSCNotes:
 ; Memory usage
 ;==============================================================
 .enum $c000 export
-Port3EValue                     db
+Port3EValue                     db ; Must be at the start
 ButtonState                     db
 LastButtonState                 db
 VisNumber                       db
@@ -128,7 +170,6 @@ VisRoutine                      dw ; Routine to calculate vis
 VisDisplayRoutine               dw ; Routine to call in VBlank to update vis
 VisChanged                      db ; Flag to signal that the vis needs to be initialised
 SecondsChanged                  db
-VisBuffer                       dsb 512 ; Visualisers can do as they wish with this
 LoopsChanged                    db
 PaletteChanged                  db
 PaletteNumber                   db
@@ -139,13 +180,16 @@ VWFCurrentTileIndex             db ; Tile index currently being drawn into
 VWFNextUnusedTile               db ; Next tile to use when we need a fresh one
 VWFRemainingColumns             db ; Number of columns left to draw
 VWFCurrentTileBufferPosition    dw ; Pointer to current column
-VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 VWFTilemapAddress               dw
 VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
 ZX0Memory                       dw
+.ende
+.enum $c100 export
+VisBuffer                       dsb 512 ; Visualisers can do as they wish with this
 VGMMemoryStart                  dsb 256
 ChunkData                       .db ; overlaps with the following
-ZX0TempBuffer                   dsb 2000 ; May be more...
+ZX0TempBuffer                   dsb 2048
+VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 .ende
 
 .section "ZX0 decompressor" free
@@ -3920,27 +3964,37 @@ _DrawUnicodeCharacter:
   ex de, hl
 +:; First check we have the right chunk loaded
   call _loadChunk
-  ; Now the data at ChunkData is the lookup based on e
-  ld d, 0
-  ld hl, ChunkData
-  add hl, de ; Point to the e'th character, with 3 bytes per entry
-  add hl, de
-  add hl, de
-  ; Read it in
-  ld a, (hl) ; Width
-  ; Check for zero
+  ; Now the width is at ChunkData+e
+  ld h, >ChunkData
+  ld l, e
+  ld a, (hl)
   or a
   jr z, _unsupportedCharacter
-  ld b, a ; b = number of columns to draw
+  ld c, a ; save width
+
+  ; So now add the previous entries up
+  ld d, >ChunkData+1 ; MSB = start of bitmap data
+  ld l, 0
+  ld a, e
+  or a
+  jr c, ++ ; e is 0, nothing to add
+  ld b, a
+  xor a ; LSB
+-:add (hl) ; sum widths, this has to be 16-bit
+  ; if it carries, increment d
+  jr c, _carry
   inc hl
-  ld a, (hl) ; Offset
+  djnz -
+  jr + ; could avoid this by placing _carry somewhere convenient?
+  
+_carry:
+  inc d
   inc hl
-  ld h, (hl)
-  ld l, a
-  ; That's the offset from ChunkData.
-  ld de, ChunkData
-  add hl, de
-  ex de, hl
+  djnz -
+
++:ld e, a
+++:
+  ld b, c
   ; Now de points at the first column of 1-bit pixel data.
 
 -:ld a, (de)

@@ -130,8 +130,13 @@ def convert(args):
             asm.write(f'.row ${i:02x}, :Chunk{i:04x}, Chunk{i:04x}\n')
 
             # Then encode an uncompressed file for each chunk
-            with open(f'{outdir}/chunk{i:02x}.bin', 'wb') as bin:
+            with open(f'{outdir}/chunk{i:02x}.bin', 'wb') as bin,\
+                open(f'{outdir}/chunk{i:02x}.v2.bin', 'wb') as bin2,\
+                open(f'{outdir}/chunk{i:02x}.v3.bin', 'wb') as bin3,\
+                open(f'{outdir}/chunk{i:02x}.v4.bin', 'wb') as bin4,\
+                open(f'{outdir}/chunk{i:02x}.raw.bin', 'wb') as raw:
                 local_chars = buckets[i]
+                # v1: lookup of (width, offset)x256, followed by bits
                 # First the lookup
                 offset = bucket_factor*3
                 for n in range(bucket_factor):
@@ -153,6 +158,69 @@ def convert(args):
                             bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
                             byte |= (bit << (7 - y))  # Top pixel is MSB
                         bin.write(struct.pack('B', byte))
+
+                # v2: packed (width, bits)
+                for n in range(bucket_factor):
+                    if n in local_chars:
+                        char = local_chars[n]
+                        bin2.write(struct.pack('B', char.img.width))
+                        for x in range(char.img.width):
+                            byte = 0
+                            for y in range(8):
+                                pixel = char.img.getpixel((x, y))
+                                bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
+                                byte |= (bit << (7 - y))  # Top pixel is MSB
+                            bin2.write(struct.pack('B', byte))
+                    else:
+                        bin2.write(struct.pack('B', 0))
+
+                # v3: lookup of packed (width, offset)x256, followed by bits
+                offset = bucket_factor*2
+                for n in range(bucket_factor):
+                    if n in local_chars:
+                        packed = (offset << 4) | local_chars[n].img.width
+                        bin3.write(struct.pack('<H', packed))
+                        offset += local_chars[n].img.width
+                    else:
+                        bin3.write(struct.pack('<H', 0))
+                # Then the data
+                for char in local_chars.values():
+                    for x in range(char.img.width):
+                        byte = 0
+                        for y in range(8):
+                            pixel = char.img.getpixel((x, y))
+                            bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
+                            byte |= (bit << (7 - y))  # Top pixel is MSB
+                        bin3.write(struct.pack('B', byte))
+
+                # v4: lookup of widthx256, followed by bits
+                offset = bucket_factor*2
+                for n in range(bucket_factor):
+                    if n in local_chars:
+                        bin4.write(struct.pack('B', local_chars[n].img.width))
+                        offset += local_chars[n].img.width
+                    else:
+                        bin4.write(struct.pack('B', 0))
+                # Then the data
+                for char in local_chars.values():
+                    for x in range(char.img.width):
+                        byte = 0
+                        for y in range(8):
+                            pixel = char.img.getpixel((x, y))
+                            bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
+                            byte |= (bit << (7 - y))  # Top pixel is MSB
+                        bin4.write(struct.pack('B', byte))
+
+                # How about no lookup?
+                for char in local_chars.values():
+                    for x in range(char.img.width):
+                        byte = 0
+                        for y in range(8):
+                            pixel = char.img.getpixel((x, y))
+                            bit = 0 if pixel == 0 else 1  # 0 = black, 255 = white
+                            byte |= (bit << (7 - y))  # Top pixel is MSB
+                        raw.write(struct.pack('B', byte))
+
                 # Also an image so I know what's in there
                 sheet = Image.new('RGB', (128, bucket_factor//2), (0, 0, 0))
                 for y in range(0, bucket_factor//2, 8):
@@ -169,7 +237,7 @@ def convert(args):
         # Then emit to the asm, expecting compression to happen in the meantime
         for i in buckets:
             asm.write(f'.section "Chunk{i:04x}" superfree\n')
-            asm.write(f'Chunk{i:04x}: .incbin "{outdir}/chunk{i:02x}.bin.zx0"\n')
+            asm.write(f'Chunk{i:04x}: .incbin "{outdir}/chunk{i:02x}.v4.bin.zx0"\n')
             asm.write('.ends\n')
     
 

@@ -57,7 +57,7 @@ fonts/font-ascii.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf
 	python fonts/fontdump.py \
 	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
-	-outdir=fonts -filename=$@ -skip=21,22,23,24,25,32,33,4e,4f,50,51,52,53,54,55,56,57,58,59,5a,5b,5c,5d,5e,5f,60,61,62,63,64,65,66,67,68,69,6a,6b,6c,6d,6e,6f,70,71,72,73,74,75,76,77,78,79,7a,7b,7c,7d,7e,7f,80,81,82,83,84,85,86,87,88,89,8a,8b,8c,8d,8e,8f,90,91,92,93,94,95,96,97,98,99,9a,9b,9c,9d,9e,9f,ff
+	-outdir=fonts -filename=$@ -skip=32,33,4e,4f,50,51,52,53,54,55,56,57,58,59,5a,5b,5c,5d,5e,5f,60,61,62,63,64,65,66,67,68,69,6a,6b,6c,6d,6e,6f,70,71,72,73,74,75,76,77,78,79,7a,7b,7c,7d,7e,7f,80,81,82,83,84,85,86,87,88,89,8a,8b,8c,8d,8e,8f,90,91,92,93,94,95,96,97,98,99,9a,9b,9c,9d,9e,9f,ff
 # We squeeze as much as we can in, including kana...
 
 # Range     Size  Action  Content
@@ -110,6 +110,6 @@ clean:
 	del art\*.palette
 	del smsvgmplayer*.stub
 	del smsvgmplayer*.stub.o
-	del auto.makefile
+	del auto*.makefile
 	del fonts\chunk*
 	del fonts\font*.asm
