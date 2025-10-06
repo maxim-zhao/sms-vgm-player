@@ -47,41 +47,60 @@ fonts/%.bin.zx0: fonts/%.bin
 
 fonts/%.bin: fonts/font-unicode.asm fonts/font-ascii.asm
 
-fonts/font-unicode.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_gothic.ttf
+fonts/font-unicode.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_gothic.ttf fonts/quan.ttf
 	python fonts/fontdump.py \
 	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
+	-size=8 -offset=0 fonts/quan.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
 	-outdir=fonts -filename=$@ -skip=ff
 
-fonts/font-ascii.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf
+fonts/font-ascii.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_gothic.ttf fonts/quan.ttf
 	python fonts/fontdump.py \
 	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
+	-size=8 -offset=0 fonts/quan.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
-	-outdir=fonts -filename=$@ -skip=32,33,4e,4f,50,51,52,53,54,55,56,57,58,59,5a,5b,5c,5d,5e,5f,60,61,62,63,64,65,66,67,68,69,6a,6b,6c,6d,6e,6f,70,71,72,73,74,75,76,77,78,79,7a,7b,7c,7d,7e,7f,80,81,82,83,84,85,86,87,88,89,8a,8b,8c,8d,8e,8f,90,91,92,93,94,95,96,97,98,99,9a,9b,9c,9d,9e,9f,ff
+	-outdir=fonts -filename=$@ -skip=6..1c,22..24,28..fa,fc..ff
 # We squeeze as much as we can in, including kana...
+# Range   Size  "ASCII"Characters
+# 00       995  ✅     Basic Latin
+# 01      1064  ✅     Latin extended
+# 02       336  ✅     IPA extensions, Spacing Modifier Letters
+# 03       486  ✅     Combining Diacritical Marks, Greek and Coptic
+# 04       518  ✅     Cyrillic
+# 05       184  ✅     Cyrillic, Armenian, Hebrew
+# 06..1c     -  ❌     Arabic, Syraic, Thaana, Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Thai, Tibetan, Myanmar, Georgian, Hangul Jamo, Ethiopic, Cherokee, Unified Canadian Aboriginal Syllabics, Ogham, Tagalog, Hanunoo, Buhid, Tagbanwa, Khmer, Mongolian, Limbu, Tai Le, Khmer Symbols (a few characters present)
+# 1d       102  ✅     Phonetic Extensions
+# 1e       405  ✅     Latin Extended Additional
+# 1f        17  ✅     Greek Extended
+# 20       430  ✅     Punctuation, symbols
+# 21       371  ✅     Letterlike symbols, number forms, arrows
+# 22       388  ❌     Maths
+# 23        78  ❌     Misc technical
+# 24       406  ❌     Enclosed alphanumerics
+# 25       716  ✅     Box Drawing
+# 26       427  ✅     Misc symbols - inc. ♪
+# 27       248  ✅     Dingbats, maths, arrows
+# 28         -  ❌     Braille, arrows
+# 29        15  ❌     Maths
+# 2A..2B     -  ❌     Maths, misc symbols
+# 2c        36  ❌     ?
+# 2d         -  ❌     ?
+# 2E       122  ❌     CJK Radicals
+# 2F        17  ❌     Kangxi Radicals
+# 30      1187  ✅     CJK Symbols and Punctuation, Hiragana, Katakana
+# 31       580  ❌     Bopomofo
+# 32         -  ❌     Enclosed CJK Letters and Months
+# 33         -  ❌     CJK Compatibility
+# 34..4D   622  ❌     Unified Ideographs Extension A
+# 4E..9F 72205  ❌     CJK Unified Ideographs
+# a0..ab    37  ❌     Yi (?)
+# AC..D7 22308  ❌     Hangul Syllables
+# D8..fa     -  ❌     Surrogates, private use, CJK compat
+# fb        21  ✅     Alphabetic Presentation Forms
+# fc..fd     -  ❌     ?
+# fe       267  ❌     CJK weird punctuation
+# ff         -  ❌     Full-width
 
-# Range     Size  Action  Content
-# 0        1317   ✅     ASCIIish
-# 2 (upper) <126  🗑     Combining chars - not filterable
-# 3         562   🗑     Greek
-# 4         690   🗑     Cyrillic
-# 5         231   🗑     Hebrew
-# 1d         35   🗑     Random wrong stuff?
-# 1e         90   ✅     Extended roman, need this
-# 20        424   ✅     Extra punctuation, super/subscript numbers
-# 21        333   🗑     Arrows, fractions, currencies
-# 22        387   🗑     Maths
-# 23         66   🗑     "Technical"
-# 24        131   🗑     Circled numbers and letters
-# 25        671   🗑     Box drawing
-# 26        193   🗑     "Miscellaneous symbols"
-# 27         19   🗑     "Dingbats"
-# 30       1387   ✅     Kana
-# 32         92   ✅     Enclosed CJK
-# 33        270   ✅     CJK compatibility
-# 4e..9f  55578   ✅     CJK
-# fb         27   🗑     Ligatures
-# ff          ?   🗑     Fullwidth
 
 # And then we build it
 smsvgmplayer.stub.o: 

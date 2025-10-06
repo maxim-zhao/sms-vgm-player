@@ -68,6 +68,8 @@
 ; (width, offset)x256, data     63707           5746277
 ; widthx256                     49111           6220999
 ; optimized a bit with alignment                6087267
+; compute offsets on chunk load                 5575481
+; widthx256 packed              48938           Not worth testing for <200B saved...
 
 .define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
 .define TilemapBaseAddressForLogo $3000
@@ -77,7 +79,7 @@
 ;.define Debug
 
 .ifdef UNICODE
-.define VGMSTARTPAGE 4
+.define VGMSTARTPAGE 8
 .else
 .ifdef Debug
 .define VGMSTARTPAGE 2 ; more space needed for debug code
@@ -188,7 +190,8 @@ ZX0Memory                       dw
 VisBuffer                       dsb 512 ; Visualisers can do as they wish with this
 VGMMemoryStart                  dsb 256
 ChunkData                       .db ; overlaps with the following
-ZX0TempBuffer                   dsb 2048
+ZX0TempBuffer                   dsb 2048 ; can reduce?
+ChunkDataOffsets                dsw 256 ; computed on chunk load
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 .ende
 
@@ -3970,31 +3973,18 @@ _DrawUnicodeCharacter:
   ld a, (hl)
   or a
   jr z, _unsupportedCharacter
-  ld c, a ; save width
-
-  ; So now add the previous entries up
-  ld d, >ChunkData+1 ; MSB = start of bitmap data
-  ld l, 0
-  ld a, e
-  or a
-  jr c, ++ ; e is 0, nothing to add
-  ld b, a
-  xor a ; LSB
--:add (hl) ; sum widths, this has to be 16-bit
-  ; if it carries, increment d
-  jr c, _carry
-  inc hl
-  djnz -
-  jr + ; could avoid this by placing _carry somewhere convenient?
+  ld b, a ; save width
   
-_carry:
-  inc d
+  ; The offset is at ChunkDataOffsets+e*2
+  ex de, hl
+  ld h, 0
+  add hl, hl
+  ld a, h
+  add >ChunkDataOffsets ; could avoid this if it was 512-aligned
+  ld h,a
+  ld e, (hl)
   inc hl
-  djnz -
-
-+:ld e, a
-++:
-  ld b, c
+  ld d, (hl)
   ; Now de points at the first column of 1-bit pixel data.
 
 -:ld a, (de)
@@ -4232,6 +4222,29 @@ _foundIt:
   ; Remember it
   ld a, d
   ld (CurrentChunk), a
+  
+  ; Now build the offsets table
+_buildChunkDataOffsets:
+  ld ix, ChunkData ; source
+  ld b, 0 ; Counter for 256
+  push de
+    ld de, ChunkData+256 ; Initial offset
+    ld hl, ChunkDataOffsets ; destination
+-:  ; Write
+    ld (hl), e
+    inc hl
+    ld (hl), d
+    inc hl
+    ; Add width
+    ld a, (ix+0)
+    inc ix
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    djnz -
+  pop de
   ret
   
 .ends
