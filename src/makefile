@@ -45,7 +45,7 @@ art/3d-pad.tilemap.zx0: art/3d-pad.png
 fonts/%.bin.zx0: fonts/%.bin
 	fonts/zx0.exe -f $< $@
 
-fonts/%.bin: fonts/font-unicode.asm fonts/font-ascii.asm
+fonts/%.bin: fonts/font-unicode.asm
 
 fonts/font-unicode.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misaki_gothic.ttf fonts/quan.ttf
 	python fonts/fontdump.py \
