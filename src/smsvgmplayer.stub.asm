@@ -184,15 +184,15 @@ VWFRemainingColumns             db ; Number of columns left to draw
 VWFCurrentTileBufferPosition    dw ; Pointer to current column
 VWFTilemapAddress               dw
 VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
+VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 ZX0Memory                       dw
 .ende
 .enum $c100 export
-VisBuffer                       dsb 512 ; Visualisers can do as they wish with this
+VisBuffer                       dsb 512 ; Visualisers can do as they wish with this. Could be smaller?
 VGMMemoryStart                  dsb 256
-ChunkData                       .db ; overlaps with the following
-ZX0TempBuffer                   dsb 2048 ; can reduce?
 ChunkDataOffsets                dsw 256 ; computed on chunk load
-VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
+ChunkData                       .db ; overlaps with the following
+ZX0TempBuffer                   dsb 2048 ; is actually larger...
 .ende
 
 .section "ZX0 decompressor" free
@@ -646,9 +646,6 @@ DrawGD3Tag:
       ld a,12
       call MoveHLForwardByA
       
-      ld a, $ff
-      ld (CurrentChunk),a ; Assume we never have chunk $ff
-
       ; We prefer the English or Japanese according to the system region
       ld de, TilemapAddress(1, 18)
       call _DrawGd3StringForRegion ; Title
@@ -3868,6 +3865,9 @@ LoadZX0ToVRAM:
     or c
     jp nz, -
   ei
+  ; Mark buffer as invalid for VWF
+  ld a, -1
+  ld (CurrentChunk), a
   ret
 .ends
 
@@ -3880,9 +3880,6 @@ DrawTextUnicode:
   ld (VWFTilemapAddress), de
   ld a, c
   ld (VWFTileCount), a
-  ; Clear the loaded chunk state, assume the buffer has been overwritten
-  ld a, -1
-  ld (CurrentChunk), a
 -:ld e, (hl)
   call MoveHLForward
   push hl
@@ -3904,9 +3901,6 @@ DrawTextASCII:
   ; de = VRAM address of first tile
   ; First save the tilemap address
   ld (VWFTilemapAddress), de
-  ; Clear the loaded chunk state
-  ld a, -1
-  ld (CurrentChunk), a
   ld (VWFTileCount), a ; not limiting...
   ; Draw text by converting to Unicode...
 -:ld a, (hl)
@@ -3946,13 +3940,14 @@ DrawTextASCII_XY:
   inc hl ; Assume we are not across page boundaries here, as it's not GD3
   ld d, (hl)
   inc hl
+  ld a,100
   call DrawTextASCII
   inc hl
   jr -
 
 _unsupportedCharacter:
   ; Draw a question mark instead
-  ld de, '?'
+  ld de, $2753 ; "❓" better than "?"
   ; fall through
   
 _DrawUnicodeCharacter:
@@ -3966,7 +3961,9 @@ _DrawUnicodeCharacter:
   add hl, de
   ex de, hl
 +:; First check we have the right chunk loaded
-  call _loadChunk
+  ld a,(CurrentChunk)
+  cp d
+  call nz, _loadChunk
   ; Now the width is at ChunkData+e
   ld h, >ChunkData
   ld l, e
@@ -4177,11 +4174,6 @@ _bitplane_loop:
   ret
 
 _loadChunk:
-  ; Check if we already have it
-  ld a,(CurrentChunk)
-  cp d
-  ret z
-  ; No: try to load it
   ld hl,Chunks
   ld bc, 4
 -:; See if it's the one we want

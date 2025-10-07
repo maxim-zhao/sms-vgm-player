@@ -20,11 +20,14 @@ The included `makerom.py` Python script will do all this for you. You can invoke
 
 Character support
 -----------------
-`smsvgmplayer.stub` includes support for the Latin alphabet (with many, but not all, accented characters), as well as Hiragana and Karakana.
 
-`smsvgmplayer-unicode.stub` includes support for over 10,000 characters including the most common Kanji and a lot of Korean. Rename it to `smsvgmplayer.stub` to use the Python script.
+`smsvgmplayer.stub` includes support for the Latin alphabet (with many, but not all, accented characters), as well as Hiragana and Katakana.
+
+`smsvgmplayer-unicode.stub` includes support for over 10,000 characters including the most common Kanji, Korean, and many other scripts and symbols. Rename it to `smsvgmplayer.stub` to use the Python script.
 
 The font data comes from three sources:
 1. A [variable-width modified version](https://www.pentacom.jp/pentacom/bitfontmaker2/gallery/?id=19005) of [Amstrad PC](https://int10h.org/oldschool-pc-fonts/fontlist/font?amstrad_pc) for Latin
 2. [QuanPixel](https://diaowinner.itch.io/galmuri-extended) for CJK
 3. [Misaki Gothic](https://littlelimit.net/misaki.htm) adds a few more
+
+There is no emoji support.
