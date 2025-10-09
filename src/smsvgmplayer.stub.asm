@@ -76,7 +76,7 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-;.define Debug
+.define Debug
 
 .ifdef UNICODE
 .define VGMSTARTPAGE 8
@@ -186,6 +186,7 @@ VWFTilemapAddress               dw
 VWFTileCount                    db ; Number of tiles we can use. Stop drawing when exhausted.
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 ZX0Memory                       dw
+PausedFlashCounter              db ; Counter for flashing the time while paused
 .ende
 .enum $c100 export
 VisBuffer                       dsb 512 ; Visualisers can do as they wish with this. Could be smaller?
@@ -282,6 +283,7 @@ VGMPlayerVBlank:
     call VGMUpdate      ; Read/handle sound data
     SetDebugColour(1,0,0) ; Dark red
     call CheckInput ; Read input into memory
+    call ProcessInput
     call ShowTime   ; Update time display
     call ShowLoopNumber
     SetDebugColour(2,0,0) ; Medium red
@@ -439,6 +441,8 @@ main:
 .endif
 
   ; Reset VGM player
+  ld a, VGMSTARTPAGE
+  ld (PAGING_SLOT_2), a
   call VGMInitialise
 
 .ifdef Debug
@@ -478,7 +482,7 @@ main:
 InfiniteLoop:   ; to stop the program
   halt
   SetDebugColour(0,2,0) ; Medium green
-  call ProcessInput   ; Process input from the last VBlank
+  ;call ProcessInput   ; Process input from the last VBlank
 
   SetDebugColour(3,3,0) ; Bright yellow = vis init
   ld a,(VisChanged)
@@ -499,30 +503,36 @@ InfiniteLoop:   ; to stop the program
 ;==============================================================
 ; VGM offset to SMS offset convertor
 ; Inputs:
-; a = offset of dword in VGM file
+; a = offset of dword in VGM header, which is a relative offset in the file
 ; Outputs:
-; a = page number ($02+) *
+; a = page number ($01+) *
 ; hl = offset ($8000-$bfff)
 ; * If dword is zero then a will be zero to show that
 ;==============================================================
 .section "VGM to SMS offset" free
+AddBCToDEHL:
+  add hl,bc
+  ret nc
+  inc de
+  ret
+  
 VGMOffsetToPageAndOffset:
   push ix
   push bc
   push de
-    ; Remember the offset value in c because I need to use a
-    ld c,a
+    ld c, a ; save for now
 
     ; Page in the first page, remembering the current page on the stack
     ld a,(PAGING_SLOT_2)
     push af
-      ld a,VGMSTARTPAGE
+      ld a,(VGMFileStartPage)
       ld (PAGING_SLOT_2),a
-
-      ; offset of dword in .sms -> ix
-      ld b,$80
-      push bc
-      pop ix
+      
+      ; Point ix at the data
+      ld ix, (VGMFileStartOffset)
+      ld d, 0
+      ld e, c ; offset -> de
+      add ix, de
 
       ; Value stored there -> dehl
       ld l,(ix+0)
@@ -536,29 +546,36 @@ VGMOffsetToPageAndOffset:
       or l
       or d
       or e
-      jr nz,_NonZero
-      ld c,$00
-      jr _end
+      jr z,_Zero
 
-_NonZero:
-      ; Add offset, ie. dehl + c -> dehl
+      ; This is relative to the address itself, so we need to add
+      ; VGMFileStartPage * $4000 + VGMFileStartOffset - $8000 + (original parameter)
+      ; First the parameter...
       ld b,$00
-      add hl,bc
-      jr nc,+
-      inc de
-+:
+      call AddBCToDEHL
+
+      ; Then VGMFileStartOffset
+      ld bc, (VGMFileStartOffset)
+      call AddBCToDEHL
+
+      ; This is now the ROM address + $8000 - VGMFileStartOffset * $4000
+      ; We could add these on but the code is simpler to skip it...
+
       ; Figure out which page it's on and store that in c now
       ; ddddddddeeeeeeeehhhhhhhhllllllll
       ; Page -----^^^^^^^^
-      ld a,e
-      ld b,h
+      ld a, e
+      ld b, h
+      ; Shift left 2 -> a = page
       sla b
       rla
       sla b
       rla
-      .repeat VGMSTARTPAGE
-      inc a ; VGM stub is one page
-      .endr
+      push hl
+        ld hl, VGMFileStartPage
+        add a, (hl)
+        sub 2 ; for the extra $8000
+      pop hl
       ld c,a
 
       ; And then get the offset by modding by $4000 and adding $8000
@@ -567,9 +584,8 @@ _NonZero:
       res 6,h
       set 7,h
 
-_end:
     ; Restore original page
-    pop af
+-:  pop af
     ld (PAGING_SLOT_2),a
 
     ; Output a=page number
@@ -578,6 +594,10 @@ _end:
   pop bc
   pop ix
   ret
+  
+_Zero:
+    ld c, 0
+    jr -
 .ends
 
 .section "Draw GD3" free
@@ -746,9 +766,14 @@ _DrawGD3String:
 ; Time displayer
 ;==============================================================
 ShowTime:
+  ld a, (VGMPlayerState)
+  cp VGMPaused
+  jr z, _paused
+  ; PLaying, fast-forward or stopped
   ld a,(SecondsChanged)
   or a
   ret z
+_updateTime:
   ; get digits
   ld hl,(VGMTimeMins)     ; h = sec  l = min
   ; Set start name table address
@@ -761,6 +786,30 @@ ShowTime:
   call DrawByte
   xor a
   ld (SecondsChanged),a
+  ret
+  
+_paused:
+  ld a, (PausedFlashCounter)
+  inc a
+  and %11111
+  ld (PausedFlashCounter), a
+  jr z, _updateTime ; Show time when it hits 0
+  cp 16
+  ret nz
+_hideTime:
+  ; Hide time when it hits 16
+  ld de, TilemapAddress(2, 6)
+  call +
+  ld de, TilemapAddress(2, 7)
+  call +
+  ld de, TilemapAddress(7, 6)
+  call +
+  ld de, TilemapAddress(7, 7)
++:rst VRAMToDE
+  ld b, 8
+  xor a
+-:out ($be), a
+  djnz -
   ret
 
 ;==============================================================
@@ -947,6 +996,8 @@ UpdatePalette:
 .section "VGM routines" free
 ; VGM routines memory mapping:
 .enum VGMMemoryStart export
+VGMFileStartPage        db
+VGMFileStartOffset      dw
 VGMStartPage            db      ; Start point page
 VGMStartOffset          dw      ; Start point offset when paged in
 VGMDataPointer          dw      ; VGM data pointer
@@ -1010,7 +1061,7 @@ Divide16:
   rl b
   ret
   
-IsVGMFileAtOffset:  ; pass offset in ix, uses a, sets z if file found
+IsVGMFileAtOffset:  ; pass offset in bc, uses a, sets z if file found
   push bc
     rst GetByte
     cp 'V'
@@ -1037,6 +1088,10 @@ VGMInitialise:
     ld bc,$8000
     call IsVGMFileAtOffset
     jp nz,NoVGMFile
+    
+    ld a, (PAGING_SLOT_2)
+    ld (VGMFileStartPage), a
+    ld (VGMFileStartOffset), bc
 
     ; Get lengths
     push bc
@@ -1149,6 +1204,7 @@ _Play:
   push af
     ld a,VGMPlaying
     ld (VGMPlayerState),a
+    ld (SecondsChanged), a
   pop af
   ret
 
