@@ -59,15 +59,15 @@ fonts/font-ascii.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misa
 	-size=8 -offset=0 fonts/MxPlusAmstradPC_VWF.ttf \
 	-size=8 -offset=0 fonts/quan.ttf \
 	-size=8 -offset=0 fonts/misaki_gothic.ttf \
-	-outdir=fonts -filename=$@ -skip=6..1c,22..24,28..fa,fc..ff
+	-outdir=fonts -filename=$@ -skip=4..1c,22..24,28..fa,fc..fd,ff
 # We squeeze as much as we can in, including kana...
 # Range   Size  "ASCII"Characters
 # 00       995  ✅     Basic Latin
 # 01      1064  ✅     Latin extended
 # 02       336  ✅     IPA extensions, Spacing Modifier Letters
 # 03       486  ✅     Combining Diacritical Marks, Greek and Coptic
-# 04       518  ✅     Cyrillic
-# 05       184  ✅     Cyrillic, Armenian, Hebrew
+# 04       518  ❌     Cyrillic
+# 05       184  ❌     Cyrillic, Armenian, Hebrew
 # 06..1c     -  ❌     Arabic, Syraic, Thaana, Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Thai, Tibetan, Myanmar, Georgian, Hangul Jamo, Ethiopic, Cherokee, Unified Canadian Aboriginal Syllabics, Ogham, Tagalog, Hanunoo, Buhid, Tagbanwa, Khmer, Mongolian, Limbu, Tai Le, Khmer Symbols (a few characters present)
 # 1d       102  ✅     Phonetic Extensions
 # 1e       405  ✅     Latin Extended Additional
@@ -98,7 +98,7 @@ fonts/font-ascii.asm: fonts/fontdump.py fonts/MxPlusAmstradPC_VWF.ttf fonts/misa
 # D8..fa     -  ❌     Surrogates, private use, CJK compat
 # fb        21  ✅     Alphabetic Presentation Forms
 # fc..fd     -  ❌     ?
-# fe       267  ❌     CJK weird punctuation
+# fe       267  ✅     CJK weird punctuation
 # ff         -  ❌     Full-width
 
 

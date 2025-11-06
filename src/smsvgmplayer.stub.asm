@@ -76,7 +76,7 @@
 .define TilemapBaseAddress      $3800   ; must be a multiple of $800; usually $3800; fills $700 bytes (unstretched)
 .define SpriteTableBaseAddress  $3f00   ; must be a multiple of $100; usually $3f00; fills $100 bytes
 
-.define Debug
+;.define Debug
 
 .ifdef UNICODE
 .define VGMSTARTPAGE 8
@@ -146,7 +146,7 @@ banks VGMSTARTPAGE
 ;==============================================================
 ; SDSC tag and SMS rom header
 ;==============================================================
-.sdsctag 2.1,"SMS VGM player",SDSCNotes,"Maxim"
+.sdsctag 2.2,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
 ;    123456789012345678901234567890123456789012345678901234567890123
@@ -763,9 +763,7 @@ _DrawGD3String:
   jp DrawTextUnicode
 .ends
 
-;==============================================================
-; Time displayer
-;==============================================================
+.section "UI" free
 ShowTime:
   ld a, (VGMPlayerState)
   cp VGMPaused
@@ -911,7 +909,9 @@ _drawTwoTiles:
   nop                       ; 4
   out ($be),a               ; 11 -> 28 cycles
   ret
+.ends
 
+.section "Input processing" free
 ProcessInput:
   push hl
   push af
@@ -987,6 +987,7 @@ UpdatePalette:
   xor a
   ld (PaletteChanged),a
   ret
+.ends
 
 ;==============================================================
 ; VGM routines
@@ -2567,30 +2568,30 @@ _NoHandFM:
     pop bc
     djnz --
 
+    ; Flip flicker flag
     ld a, (VisBuffer+1)
     xor 1
     ld (VisBuffer+1), a
     ret z ; zero, do not reverse
+    
     ld a, (VisBuffer+0)
-    or a
-    ret z ; nothing to do
     cp 9
     ret c ; 8 or fewer, no need to mess around
     
     ld b, a
     ld hl, VisBuffer+16
     push bc
-      call ReverseBlock
+      call _reverse
     pop bc
     ld hl, VisBuffer+32
     ; fall through
     
-ReverseBlock:
+_reverse:
     ; de = start
     ld d, h
     ld e, l
     
-    ; hl = de + b - 1
+    ; hl = start + b - 1
     ld a, b
     dec a
     add a, l
@@ -3412,6 +3413,7 @@ DrawLogoVis:
   ret
 .ends
 
+.section "Video data" free
 ;==============================================================
 ; VDP initialisation data
 ;==============================================================
@@ -3520,7 +3522,7 @@ LogoTiles:
 
 LogoTileNumbers:
 .incbin "art\screensaver.tilemap.zx0"
-
+.ends
 
 .section "Save/load settings in BBRAM" free
 _Marker:
