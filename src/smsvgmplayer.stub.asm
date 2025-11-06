@@ -282,7 +282,6 @@ VGMPlayerVBlank:
     SetDebugColour(0,1,0) ; Dark green
     call VGMUpdate      ; Read/handle sound data
     SetDebugColour(1,0,0) ; Dark red
-    call CheckInput ; Read input into memory
     call ProcessInput
     call ShowTime   ; Update time display
     call ShowLoopNumber
@@ -482,7 +481,6 @@ main:
 InfiniteLoop:   ; to stop the program
   halt
   SetDebugColour(0,2,0) ; Medium green
-  ;call ProcessInput   ; Process input from the last VBlank
 
   SetDebugColour(3,3,0) ; Bright yellow = vis init
   ld a,(VisChanged)
@@ -500,6 +498,13 @@ InfiniteLoop:   ; to stop the program
 
   jr InfiniteLoop
 
+.section "VGM to SMS offset" free
+AddBCToDEHL:
+  add hl,bc
+  ret nc
+  inc de
+  ret
+  
 ;==============================================================
 ; VGM offset to SMS offset convertor
 ; Inputs:
@@ -509,13 +514,6 @@ InfiniteLoop:   ; to stop the program
 ; hl = offset ($8000-$bfff)
 ; * If dword is zero then a will be zero to show that
 ;==============================================================
-.section "VGM to SMS offset" free
-AddBCToDEHL:
-  add hl,bc
-  ret nc
-  inc de
-  ret
-  
 VGMOffsetToPageAndOffset:
   push ix
   push bc
@@ -616,9 +614,11 @@ MoveHLForwardByA:
   ; Need to decrement by $4000
   res 6,h
   ; and page in the next page
-  ld a,(PAGING_SLOT_2)
+  ld a,(VGMDataPage)
   inc a
-  ld (PAGING_SLOT_2),a
+  ld (VGMDataPage),a
+  ld (PAGING_SLOT_2), a
+  
   ret
 
 MoveHLForward:
@@ -633,8 +633,9 @@ MoveHLForward:
     ; Need to decrement by $4000
     res 6, h
     ; and page in the next page
-    ld a, (PAGING_SLOT_2)
+    ld a,(VGMDataPage)
     inc a
+    ld (VGMDataPage),a
     ld (PAGING_SLOT_2), a
 +:pop af
   ret
@@ -680,13 +681,13 @@ DrawGD3Tag:
 
     jr _end
 
-    _NoGD3:
+_NoGD3:
     ; Say so
     ld hl,NoTagString
     ld de, TilemapAddress(10, 18)
     call DrawTextASCII
 
-    _end:
+_end:
   pop af
   pop bc
   pop de
@@ -911,15 +912,13 @@ _drawTwoTiles:
   out ($be),a               ; 11 -> 28 cycles
   ret
 
-CheckInput: ; VBlank routine, just read it into memory
-  in a,($dc)
-  ld (ButtonState),a
-  ret
-
-ProcessInput:   ; Outside of VBlank, process what was read above
+ProcessInput:
   push hl
   push af
   push bc
+    in a,($dc)
+    ld (ButtonState),a
+
     ld a,(LastButtonState)  ; get last value
     ld b,a
     ld a,(ButtonState)      ; get current value
@@ -946,7 +945,7 @@ ProcessInput:   ; Outside of VBlank, process what was read above
     bit 5,a
     call nz,VGMFastForward  ; Button 2
 
-    _Finish:
+_Finish:
   pop bc
   pop af
   pop hl
@@ -998,10 +997,10 @@ UpdatePalette:
 .enum VGMMemoryStart export
 VGMFileStartPage        db
 VGMFileStartOffset      dw
-VGMStartPage            db      ; Start point page
-VGMStartOffset          dw      ; Start point offset when paged in
-VGMDataPointer          dw      ; VGM data pointer
-VGMDataPage             db      ; Page number
+VGMStartPage            db      ; VGM data start point page
+VGMStartOffset          dw      ; VGM data start offset when paged in
+VGMDataPointer          dw      ; Current VGM data pointer
+VGMDataPage             db      ; Current VGM data page number
 VGMWaitTotal            dw      ; Wait length total
 VGMFrameLength          dw      ; Amount to wait per frame (allows fast-forwarding :P)
 VGMLoopPage             db      ; Loop point page
@@ -1381,20 +1380,20 @@ VGMDoLoop:
 _NoLooping:
     ; so I'd better stop
     call _Stop
-    jr _EndVGMDoLoop
+    jr +
 
 _IsLooping:
     ld (VGMDataPage), a
-    ld (PAGING_SLOT_2),a            ; Page
+    ld (PAGING_SLOT_2),a    ; Page
     ld bc,(VGMLoopOffset)   ; offset
     ld a,(VGMLoopsPlayed)
     inc a
     daa
     ld (VGMLoopsPlayed),a
+    ld a, 1
     ld (LoopsChanged),a
 
-    _EndVGMDoLoop:
-  pop af
++:pop af
   ret
 
 VGMUpdate:
@@ -1438,27 +1437,48 @@ GetData:
 .endif
 
 ReadData:
+  ; hl = wait length
+  ; bc = pointer to data (!)
     rst GetByte
 .ifdef Debug
     ; Debug display of information
 ;    call WriteNumberEx
 .endif
-    cp $4f      ; GG st
-    jp z,GameGearStereo
+    ; A full lookup would be 512B...
+    ;     x0      x1      x2      x3      x4      x5      x6      x7      x8      x9      xa      xb      xc      xd      xe      xf
+    ; 0x  [ Undefined                                                                                                                 ]
+    ; 1x  [ Undefined                                                                                                                 ]
+    ; 2x  [ Undefined                                                                                                                 ]
+    ; 3x  [ One operand, reserved                                                                                                     ]
+    ; 4x  [ Two operands, reserved                                                                                              ] GGst
+    ; 5x  PSG     YM2413  [YM2612       ] YM2151  YM2203  [YM2608       ] [YM2610       ] YM3812  YM3526  Y8950   YMZ280B [YMF262     ]
+    ; 6x  [Undef] WaitN   Wait735 Wait882 WaitOvr [Undef] End     Data    PCMRAM  [ Undefined                                         ]
+    ; 7x  [ Wait n-$6f samples                                                                                                        ]
+    ; 8x  [ YM2612 sample + wait n-$80                                                                                                ]
+    ; 9x  [ DAC stream control                          ] [ Undefined                                                                 ]
+    ; ax  AY8910  [ Two operands, reserved                                                                                            ]
+    ; bx  RF5C68  RF5C164 PWM     GB DMG  NES APU MultPCM uPD7759 OKIM6258OKIM6295HuC6280 K053260 Pokey   WonderS SAA1099 ES5506  GA20
+    ; cx  SegaPCM RF5C68  RF5C164 MultPCM QSound  SCSP    WonderS VSU     X1-010  [ Three operands, reserved                          ]
+    ; dx  YMF278B YMF271  SCC1    K054539 C140    ES5503  ES5506  [ Three operands, reserved                                          ]
+    ; ex  PCMSeek C352    [ Four operands, reserved                                                                                   ]
+    ; fx  [ Four operands, reserved                                                                                                   ]
+    
+    ; We dispatch the "expected" ones first...
     cp $50      ; PSG
     jp z,PSG
     cp $51      ; YM2413
     jp z,YM2413
-    cp $61      ; wait n
-    jp z,WaitNSamples
     cp $62      ; wait 1/60
     jp z,Wait160th
     cp $63      ; wait 1/50
     jp z,Wait150th
+    cp $4f      ; GG stereo
+    jp z,Unhandled1Byte ; We can't handle GG
+    cp $61      ; wait n
+    jp z,WaitNSamples
     cp $66      ; end of file
     jp z,EndOfFile
-    cp $67      ; data block
-    jr z,DataBlock
+
     ; block ranges
     ld d,a ; backup
     and $f0
@@ -1466,19 +1486,25 @@ ReadData:
     jr z,WaitSmallN
     cp $80
     jr z,YM2612SampleWithWait
-    ; unhandled ranges
+
+    ; And now handle the rest...
     ld a,d
+    cp $67      ; data block
+    jr z,DataBlock
+    cp $68      ; data block
+    jr z,PCMRAMWrite
+
     cp $30          ; <$30 = undefined
     jr c,ReadData
-    cp $51          ; $30-$50 = 1 operand
+    cp $40          ; $30-$3f = 1 operand
     jr c,Unhandled1Byte
-    cp $60          ; $51-$5f = 2 operands
+    cp $60          ; $40-$5f = 2 operands (except for 4f and 50 already handled)
     jr c,Unhandled2Bytes
-    cp $a1          ; up to $a0 = undefined
+    cp $a0          ; Remaining gaps up to $a0 = undefined
     jr c,ReadData
     cp $c0          ; $a0-$bf = 2 operands
     jr c,Unhandled2Bytes
-    cp $d0          ; $c0-$df = 3 operands
+    cp $e0          ; $c0-$df = 3 operands
     jr c,Unhandled3Bytes
 ;    jr Unhandled4Bytes ; remaining is $e0-$ff = 4 operands
 ; fall through
@@ -1493,21 +1519,29 @@ Unhandled1Byte:
     rst GetByte
     jr GetData
 
+PCMRAMWrite:
+  ; Skip 11 bytes. Can't use bc!
+  ld d, 11
+-:rst GetByte
+  dec d
+  jr nz, -
+  jr GetData
+  
 WaitSmallN:
-    ld a,d ;restore
-    and $f
-    inc a
-    ; fall through
+  ld a,d ; restore command byte
+  and $f
+  inc a
+  ; fall through
 
 WaitASamples:
-    ld e,a
-    ld d,0
-    jp _WaitDESamples
+  ld e,a
+  ld d,0
+  jp _WaitDESamples
 
 YM2612SampleWithWait:
-    ld a,d ;restore
-    and $f
-    jr WaitASamples
+  ld a,d ;restore
+  and $f
+  jr WaitASamples
 
 DataBlock:
     ; skip next byte (compatibility byte)
@@ -1563,11 +1597,6 @@ DataBlock:
     pop de
     jp GetData
 
-GameGearStereo: ; discard
-    rst GetByte
-;    out ($06),a ; output stereo data :( crashes a real SMS(2)
-    jp GetData
-
 PSG:
     rst GetByte
     out ($7f),a ; output it
@@ -1610,63 +1639,62 @@ _NotVolume:
 
       jr _PSGAnalysisEnd
 
-      _Tone1:         ; Tone1
-          ld a,b
-          ld (VGMPSGTone1stByte),a
+_Tone1:         ; Tone1
+      ld a,b
+      ld (VGMPSGTone1stByte),a
 
-          and %01100000   ; Is it ch3?
-          cp  %01100000
-          jp nz,+++
-          ld a,b
-          and %00000111
-          ld (VGMPSGNoiseMode),a
-          +++:
-          jr _PSGAnalysisEnd
+      and %01100000   ; Is it ch3?
+      cp  %01100000
+      jp nz,_PSGAnalysisEnd
+      ld a,b
+      and %00000111
+      ld (VGMPSGNoiseMode),a
+      jr _PSGAnalysisEnd
 
-      _Tone2:         ; Tone2
-          ld a,(VGMPSGTone1stByte)    ; Look at 1st byte
-          srl a           ; Extract channel number
-          srl a
-          srl a
-          srl a
-          srl a
-          and %00000011
-          cp 3            ; If it's channel 3 then exit
-          jr z,_PSGAnalysisEnd
-          ld c,a          ; c = channel
+_Tone2:         ; Tone2
+      ld a,(VGMPSGTone1stByte)    ; Look at 1st byte
+      srl a           ; Extract channel number
+      srl a
+      srl a
+      srl a
+      srl a
+      and %00000011
+      cp 3            ; If it's channel 3 then exit
+      jr z,_PSGAnalysisEnd
+      ld c,a          ; c = channel
+      push de
+          ; Extract frequency
+          ld a,(VGMPSGTone1stByte)
+          and $0f
+          ld e,a      ; de = ????????0000ffff
+          ld a,b
+          and %00111111   ; also resets carry
+          ld d,a      ; d = 00ffffff
+          xor a
+          rr d        ; Shift right, input from carry, output into carry
+          rr a        ; Do the same
+          rr d        ; Repeat 4 times
+          rr a
+          rr d
+          rr a
+          rr d
+          rr a        ; Now d = 000000ff, a = ffff0000
+          or e
+          ld e,a      ; Now de = 000000ffffffffff which is correct (at last)
+
++:        push hl
           push de
-              ; Extract frequency
-              ld a,(VGMPSGTone1stByte)
-              and $0f
-              ld e,a      ; de = ????????0000ffff
-              ld a,b
-              and %00111111   ; also resets carry
-              ld d,a      ; d = 00ffffff
-              xor a
-              rr d        ; Shift right, input from carry, output into carry
-              rr a        ; Do the same
-              rr d        ; Repeat 4 times
-              rr a
-              rr d
-              rr a
-              rr d
-              rr a        ; Now d = 000000ff, a = ffff0000
-              or e
-              ld e,a      ; Now de = 000000ffffffffff which is correct (at last)
-
-            +:push hl
-              push de
-                  ld hl,VGMPSGTones
-                  ld d,$00
-                  ld e,c
-                  add hl,de
-                  add hl,de   ; Add channel*2 to offset to get the right slot
-              pop de
-                  ld (hl),e   ; Finally store it
-                  inc hl
-                  ld (hl),d
-              pop hl
+              ld hl,VGMPSGTones
+              ld d,$00
+              ld e,c
+              add hl,de
+              add hl,de   ; Add channel*2 to offset to get the right slot
           pop de
+              ld (hl),e   ; Finally store it
+              inc hl
+              ld (hl),d
+          pop hl
+      pop de
 _PSGAnalysisEnd:
     pop bc
     jp GetData
@@ -1711,13 +1739,14 @@ YM2413:
     ld a,(Port3EValue)
     set 2,a
     out (PORT_MEMORY_CONTROL),a
-      rst GetByte
-      out ($f0),a
-      ld e,a      ; e = register
 
-      rst GetByte ; Delay needed?
-      out ($f1),a
-      ld d,a      ; d = data
+    rst GetByte
+    out ($f0),a
+    ld e,a      ; e = register
+
+    rst GetByte ; Delay needed? It seems we are slow enough...
+    out ($f1),a
+    ld d,a      ; d = data
     ld a,(Port3EValue)
     out (PORT_MEMORY_CONTROL),a
     
@@ -1933,7 +1962,7 @@ InitialiseVis:    ; Per-routine initialisation
     ret
 .ends
 
-.section "VIs buffer helpers" free
+.section "Vis buffer helpers" free
 
 ClearBuffer:   ; uses a,bc,de,hl
     ; Clear VisBuffer to all 0
@@ -2190,7 +2219,6 @@ _skipChannel:
     ret
     
 _FMNoteThresholds:
-;.dw -1152, -37, -39, -43, -45, -49, -52, -57, -62, -66, -73, -80, -88, -97, -108, -120, -136, -153, -176, -202, -237, -279, -335, -410, -512, -658, -878, -1228, -1844, -3072, -6144, -32767
 .dw 65536-36864, -18432, -12288, -9216, -7372, -6144, -5266, -4608, -4096, -3686, -3351, -3072, -2835, -2633, -2457, -2304, -2168, -2048, -1940, -1843, -1755, -1675, -1602, -1536, -1474, -1417, -1365, -1316, -1271, -1228, -1189, -1152, -1
 .ends
 
@@ -2343,12 +2371,19 @@ _Times28:
 
 ProcessPianoVis:
     ; Calculate hand x,y positions
+    ; Store in vis buffer as follows:
+    ; 0: hand count
+    ; 16..31: hand X positions
+    ; 32..47: hand Y positions
     ; Store as xyxyxy in vis buffer
-    ; Skip if no note
+    ; Skip if no note or a duplicate note
     ; Terminate with a 0
     ld ix,VGMPSGVolumes     ; 4 bytes, f = silent
     ld hl,VGMPSGTones       ; 4x2 bytes
     ld iy,VisBuffer         ; Where to store x,y. We have count at the start, xs from +16 and ys from +32
+    xor a
+    ld (iy+0),a             ; Initialise count to 0
+    
     ld b,4  ; Number of hands (PSG)
 --: push bc
       ; Check volume
@@ -2422,26 +2457,7 @@ _ProcessPSGFreq:
         cp MaxNote+1
         jr nc,_NoHandPop
 +:      
-        ; Look up the y just from the note
-        ld d,0
-        ld e,b
-        ld hl,PianoYPositions
-        add hl,de
-        ld a,(hl)
-        ld (iy+32),a
-        ; And the x
-        ld hl,PianoXPositions
-        add hl,de
-        ld a,(hl)
-        ; The octave count adds 28px per octave
-        ld hl,_Times28
-        ld b,0
-        add hl,bc
-        ld b,(hl)
-        add a,b
-        ld (iy+16),a
-        ; Next output slot
-        inc iy
+        call _AddHand
 _NoHandPop:
       pop hl
 _NoHand:    ; Don't show the hand if applicable
@@ -2449,10 +2465,10 @@ _NoHand:    ; Don't show the hand if applicable
       inc hl
       inc ix
     pop bc
-    dec b
-    jp nz,-- ; too far for djnz (only just)
+    djnz --
 
     SetDebugColour(3,0,3)
+
     ; Now do FM :)
     ; First check for rhythm mode
     ld b,6
@@ -2542,38 +2558,111 @@ _NoHand:    ; Don't show the hand if applicable
       jr nc,_NoHandFM      
 +:
       ; Now we are good!
-      ; Look up the y just from the note
-      ld hl,PianoYPositions
-      add hl,de
-      ld a,(hl)
-      ld (iy+32),a
-      ; And the x
-      ld hl,PianoXPositions
-      add hl,de
-      ld a,(hl)
-      ; The octave count adds 28px per octave
-      ld hl,_Times28
-      ld e,b
-      add hl,de
-      ld b,(hl)
-      add a,b
-      ld (iy+16),a
-      ; Next output slot
-      inc iy
+      ld c,b
+      ld b,e
+      call _AddHand
     
 _NoHandFM:
       inc ix ; Next channel
     pop bc
     djnz --
 
-    ; Store the total count
-    push iy
-    pop hl
-    ld de,$10000-VisBuffer
-    add hl,de
-    ld a,l
-    ld (VisBuffer+0),a
+    ld a, (VisBuffer+1)
+    xor 1
+    ld (VisBuffer+1), a
+    ret z ; zero, do not reverse
+    ld a, (VisBuffer+0)
+    or a
+    ret z ; nothing to do
+    cp 9
+    ret c ; 8 or fewer, no need to mess around
+    
+    ld b, a
+    ld hl, VisBuffer+16
+    push bc
+      call ReverseBlock
+    pop bc
+    ld hl, VisBuffer+32
+    ; fall through
+    
+ReverseBlock:
+    ; de = start
+    ld d, h
+    ld e, l
+    
+    ; hl = de + b - 1
+    ld a, b
+    dec a
+    add a, l
+    ld l, a
+    jr nc, +
+    inc h
++:
+    ; divide b by 2
+    srl b
+    ret z ; nothing to do
 
+-:  ld a, (de)
+    ld c, a
+    ld a, (hl)
+    ld (de), a
+    ld a, c
+    ld (hl), a
+
+    inc de
+    dec hl
+    
+    djnz -
+
+    ret
+
+_AddHand:
+    ; b = note index
+    ; c = octave
+    ; iy is our output pointer, which we increment
+    
+    ; Note index in b -> de
+    ld d, 0
+    ld e, b
+
+    ; Look up the X position
+    ld hl,PianoXPositions
+    add hl,de
+    ld a,(hl)
+
+    ; The octave count adds 28px per octave
+    ld hl,_Times28
+    ld b,0
+    add hl,bc
+    add a,(hl)
+
+    ; Skip duplicates
+    ld c, a
+    ld a, (VisBuffer+0)
+    or a
+    jr z, +
+    ld b, a
+    ld hl, VisBuffer+16
+    ld a, c
+-:  cp (hl)
+    ret z ; Return if it's a duplicate
+    inc hl
+    djnz -
++:
+    ld a, c
+    ; Save X
+    ld (iy+16),a
+    
+    ; Look up the y
+    ld hl,PianoYPositions
+    add hl,de
+    ld a,(hl)
+    ld (iy+32),a
+
+    ; Next output slot
+    inc iy
+    ld hl, VisBuffer
+    inc (hl)
     ret
     
 _GetFreqForPeriodic:
@@ -2606,8 +2695,6 @@ DrawPianoVis:
     ; Load hand x,y positions from VisBuffer
     ; Set sprite positions accordingly
 
-    .define NumHands 9
-
     ld de,SpriteTableBaseAddress|$4000
     rst VRAMToDE
     
@@ -2622,7 +2709,7 @@ DrawPianoVis:
     jr c,_bigHands
 
 _smallHands:
-    ld hl,VisBuffer+32
+    ld hl,VisBuffer+32 ; Y positions
     ld b,c
 -:  ld a,(hl)     ;  7 ; y-pos
     out ($be),a   ; 11 -> 38 total
@@ -3435,7 +3522,7 @@ LogoTileNumbers:
 .incbin "art\screensaver.tilemap.zx0"
 
 
-.section "Save/load settings in BBRAM" FREE
+.section "Save/load settings in BBRAM" free
 _Marker:
 .db "VGM"
 
@@ -3752,6 +3839,7 @@ WriteSpace:
     pop af
     ret
 .ends
+
 .section "Debug number printer" free
 WriteNumberEx:    ; writes the hex byte in a in a position unique to its value
     push bc
