@@ -477,6 +477,9 @@ main:
   out ($bf),a
   ; And CPU interrupts
   ei
+  
+  ; Auto-play
+  call VGMPlayPause
 
 InfiniteLoop:   ; to stop the program
   halt
