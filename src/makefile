@@ -25,7 +25,7 @@ art/%.tilemap.bin: art/%.png
 	$(BMP2TILE) $< -savetilemap $@
 
 art/screensaver.tilemap.zx0: art/screensaver.png
-	$(BMP2TILE) $< -tileoffset 224 -savetilemap $@
+	$(BMP2TILE) $< -tileoffset 226 -savetilemap $@
 
 art/3d-pad.tilemap.zx0: art/3d-pad.png
 	$(BMP2TILE) $< -savetilemap $@

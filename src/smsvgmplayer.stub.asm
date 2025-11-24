@@ -1,22 +1,22 @@
 ; SMS VGM player
 ; by Maxim
 
-; VRAM mapping stuff
+; VRAM mapping
 ; We have:
 ; $0000 +-------------------------------------------+
-;       | Background art                       182t |
-; $16c0 +-------------------------------------------+
+;       | Background art                       184t |
+; $1700 +-------------------------------------------+
 ;       | Large numbers                         32t |
-; $17c0 +-------------------------------------------+
+; $1800 +-------------------------------------------+
 ;       | Small numbers                         10t |
-; $1c00 +----------+----------+----------+----------+
+; $1c40 +----------+----------+----------+----------+
 ;       | Snow  4t | Scale    | Piano    | Logo     |
-; $1c80 +----------+       9t | + hands  |          |
-; $1d20            +----------+      18t |          |
-; $1e40                       +----------+      33t |
-; $2020 +--------------------------------+----------+
+; $1cc0 +----------+       9t | + hands  |          |
+; $1d60            +----------+      18t |          |
+; $1e80                       +----------+      33t |
+; $2060 +--------------------------------+----------+
 ;       | VWF font drawing area for GD3        124t |
-; $2fa0 +---------------------+---------------------+
+; $2fe0 +---------------------+---------------------+
 ;       | VWF font drawing    |
 ; $3000 | area for vis text   +---------------------+
 ;       |                     | Tilemap for VGM     |
@@ -29,47 +29,37 @@
 ;       | Sprite table                           8t |
 ; $4000 +-------------------------------------------+
 
-; For the font, we have 7467 characters, 51491px of data
-; (average just under 7px each). But the coverage of
-; Unicode is very sparse, so we need a way to know for 
-; a given char (1) do we have it, (2) where is its data
-; and (3) how wide is it.
-; Approach 1:
-; 1. Split Unicode into 256-byte ranges. 102 are present.
-; 2. First table has index, page + offset for each occupied range.
-;    -> 4 * 102 = 198 bytes, plus terminator = 199 bytes
-; 3. Each is then decompressed to RAM -> 40-50% space saved
-; 4. This chunk contains 256x
-;    byte width: 0 = no data
-;    word offset to data: 0 = no data
-;    => 3 * 256 = 768 bytes, but quite compressible
-;    followed by the bits themselves.
-;    We could save bytes here by instead having just the widths,
-;    and imply the offset by counting, but that means summing
-;    all 256 entries for every char.
-; This means we 
-; - take 51491 bytes of raw unindexed data
-; - add 12800 bytes of index
-; - compress this to 63714 bytes in a semi-seekable way
-; - add 199 bytes of lookup data
-; Approach 2: if trying to minimize the data size
-; 1. Chunk to 256 again
-; 2. In each chunk, it's just the raw data, each prefixed by the width
-;    -> 7467 widths for actual data + 18645 zeroes for missing chars
-;    -> compress these
-;    -> 50425 bytes, still not much compression
-; Approach 3: binary search
-; 1. Make a table with, for each char:
-;    - Codepoint (2B)
-;    - Offset within the raw data (2B)
-;    -> 30KB table :(
-; Approach 4: prefix each chunk with the lengths in a table
-; Format                        Size in bytes   Total CPU cycles for DrawGD3Tag
-; (width, offset)x256, data     63707           5746277
-; widthx256                     49111           6220999
-; optimized a bit with alignment                6087267
-; compute offsets on chunk load                 5575481
-; widthx256 packed              48938           Not worth testing for <200B saved...
+; For the font, we have lots of characters (average just 
+; under 7px each). But the coverage of Unicode is quite
+; sparse: many ranges have no characters, some have a few,
+; some are fully or partially populated. We need a way to 
+; know for a given (16-bit) codepoint (1) do we have it, 
+; (2) where is its data and (3) how wide is it.
+; We solve this by:
+; 1. Split Unicode into 256-byte ranges where we have any coverage.
+;    This is filtered for the 16KB version, and all we have for the
+;    "full Unicode" version (which is very far from full Unicode)
+; 2. The first table has the high byte, page + offset for each 
+;    occupied range. This is 4 bytes per occupied range
+;    -> 57 bytes for small version, 717 for full
+; 3. Each pointed chunk is compressed data consisting of:
+;    - A 256-byte table of character widths. Unsupported characters
+;      have a zero width.
+;    - Followed by the character font data, 1bpp column-major.
+; 4. The code decompresses this data to RAM, and then precomputes
+;    a 256x2 bytes table for the offset in this RAM area of each
+;    character's data
+; 5. This chunk is reused wherever possible, meaning we pay the cost
+;    of decompressing/parsing only when changing chunk, which means
+;    ASCII and kana only need one load.
+; Other things I tried:
+; - Store the widths and offsets in the compressed chunk
+;    - decompression time ends up costing more than computing the
+;      offsets
+; - Pack two character widths to one byte
+;   - Saves very little space after compression
+; - Different compression algorithms
+;   - ZX0 seems to be best, especially if we reuse the buffer for art
 
 .define SpriteSet               0       ; 0 for sprites to use tiles 0-255, 1 for 256+
 .define TilemapBaseAddressForLogo $3000
@@ -149,10 +139,11 @@ banks VGMSTARTPAGE
 .sdsctag 2.2,"SMS VGM player",SDSCNotes,"Maxim"
 .section "SDSC notes" FREE
 SDSCNotes:
-;    123456789012345678901234567890123456789012345678901234567890123
 .db "By whatever means necessary, this software must"
 .db " NOT appear on any rom tool's 'needed' list. Please note that"
-.db " only the first 32KB is the actual program, and any data after"
+.db " only the first "
+.db {"{VGMSTARTPAGE*16}"}
+.db "KB is the actual program, and any data after"
 .db " that is appended VGM music data.",0
 .ends
 
@@ -187,8 +178,9 @@ VWFTileCount                    db ; Number of tiles we can use. Stop drawing wh
 VWFTileBuffer                   dsb 64+8 ; Tile data for the current tile, in chunky format, left to right.
 ZX0Memory                       dw
 PausedFlashCounter              db ; Counter for flashing the time while paused
+NextTrackRequested              db ; Flag for next track pressed
 .ende
-.enum $c100 export
+.enum $c100 export ; Aligning some buffers for speed
 VisBuffer                       dsb 512 ; Visualisers can do as they wish with this. Could be smaller?
 VGMMemoryStart                  dsb 256
 ChunkDataOffsets                dsw 256 ; computed on chunk load
@@ -213,8 +205,7 @@ ZX0TempBuffer                   dsb 2048 ; is actually larger...
 .section "Boot section" force   ; Standard stuff (for the SMS anyway)
   di              ; disable interrupts (re-enable later)
   im 1            ; Interrupt mode 1
-  ld sp, $dff0    ; load stack pointer to not-quite-the-end of user RAM (avoiding paging regs)
-  jr main         ; jump to main program
+  jp main         ; jump to main program
 .ends
 
 .bank 0 slot 0
@@ -310,30 +301,18 @@ VGMPlayerVBlank:
 ; Pause button handler
 ;==============================================================
 .section "NMI handler" FORCE
-  ; Dodgy PAL/NTSC speed switch
-  push hl
-  push de
-      call VGMGetSpeed
-      ld de,735
-      or a
-      sbc hl,de
-      jr z,_ChangeToPAL
-      ld hl,735
-      jr _SetSpeed
-      _ChangeToPAL:
-      ld hl,882
-      _SetSpeed:
-      call VGMSetSpeed
-  pop de
-  pop hl
+  ; Pause = play/pause
+  call VGMPlayPause
   retn
 .ends
 
-
+.section "Main program" free
 ;==============================================================
 ; Main program
 ;==============================================================
 main:
+  ld sp, $dff0    ; load stack pointer to not-quite-the-end of user RAM (avoiding paging regs)
+
   xor a
   ld (PAGING_SLOT_0),a
   inc a
@@ -409,16 +388,6 @@ main:
   ld de,TileVRAMAddressFromIndex(TileIndex_SmallNumbers)
   ld hl,SmallNumbers
   call LoadZX0ToVRAM
-
-  ; Init VWF
-  ld a, TileIndex_VWF_Start
-  ld (VWFNextUnusedTile), a
-  ld a, 4
-  ld hl, VWFTileBuffer
-  ld de, VWFTileBuffer+1
-  ld bc, _sizeof_VWFTileBuffer-1
-  ld (hl), a
-  ldir
   
   ; Initial button state values (all off)
   ld a,$ff
@@ -439,9 +408,15 @@ main:
   call TurnOnScreen
 .endif
 
-  ; Reset VGM player
+  ; Check for a VGM file
   ld a, VGMSTARTPAGE
   ld (PAGING_SLOT_2), a
+  ; Check for VGM marker
+  ld bc,$8000
+  call IsVGMFileAtOffset
+  jp nz,NoVGMFile
+  
+  ; Initialise VGM player
   call VGMInitialise
 
 .ifdef Debug
@@ -465,9 +440,6 @@ main:
   ; Turn screen on
   call TurnOnScreen
 
-  ; Fake a VBlank to initialise various stuff
-  call VGMPlayerVBlank
-
   ; Finally, enable VDP frame interrupts
   ld a,(VDPRegister81Value)
   or %00100000
@@ -483,6 +455,11 @@ main:
 
 InfiniteLoop:   ; to stop the program
   halt
+  ld a, (NextTrackRequested)
+  or a
+  call nz, NextTrack ; Do this outside of VBlank
+  xor a
+  ld (NextTrackRequested), a
   SetDebugColour(0,2,0) ; Medium green
 
   SetDebugColour(3,3,0) ; Bright yellow = vis init
@@ -500,6 +477,43 @@ InfiniteLoop:   ; to stop the program
   ld (VisChanged),a
 
   jr InfiniteLoop
+.ends
+
+.section "VGM file skipper" free
+PointToNextTrack: ; TODO could inline this
+  ; If so, seek to just after it
+  ; First read the file length
+  ld a, 4 ; Look up the EOF offset
+  call VGMHeaderOffsetToPageAndPointer
+  ; Page it in
+  ld (PAGING_SLOT_2), a
+  ld (VGMFileStartPage), a
+  ld (VGMDataPage), a
+  ; Point to it
+  ld b, h 
+  ld c, l
+  ld (VGMFileStartOffset), hl
+  ld (VGMDataPointer), hl
+  ret
+
+NextTrack:
+  push af
+    call VGMStop
+    call PointToNextTrack
+    call IsVGMFileAtOffset
+    jr z, +
+    ; No: so back to the start
+    ld a, VGMSTARTPAGE
+    ld (PAGING_SLOT_2), a
+    ld bc, $8000
++:  ; TODO: reset GD3 drawing area
+    ; TODO: make vis text not use GD3 tag area, so it won't get overwritten
+    ; TODO: it doesn't work!
+    call VGMInitialise
+    call VGMPlayPause
+  pop af
+  ret
+.ends
 
 .section "VGM to SMS offset" free
 AddBCToDEHL:
@@ -507,7 +521,104 @@ AddBCToDEHL:
   ret nc
   inc de
   ret
+
+VGMOffsetToPageAndPointer:
+; Inputs:
+; dehl = an offset relative to the start of the VGM
+; outputs:
+; a = page number
+; hl = pointer into that page
+; Trashes:
+; bcde
+  push de
+    push hl
+      ; Get the VGM start offset as an absolute address in dehl
+      ld d, 0
+      ld a, (VGMFileStartPage)
+      ld e, a
+      ; We have
+      ; ddddddddeeeeeeeehhhhhhhhllllllll
+      ; 00000000<-page->????????????????
+      ; We want
+      ; 0000000000<-page->??????????????
+      srl e
+      rr h
+      srl e
+      rr h
+      ; Now we want to get the rightmost bits for hl
+      ; First save the high two bits in a
+      ld a, h
+      and %11000000
+      ld hl, (VGMFileStartOffset)
+      push af
+        ld a, h
+        and %00111111
+        ld h, a
+      pop af
+      or h
+      ld h, a
+    pop bc
+    ; Great, now add BC which is the low word of the parameter
+    call AddBCToDEHL
+  pop bc
+  ; Now the high word
+  ex de, hl
+  add hl, bc
+  ex de, hl
+
+  ; Now convert back to a page + pointer
+  ; We have
+  ; ddddddddeeeeeeeehhhhhhhhllllllll = absolute address
+  ;           <-page-><------------> <- offset - $8000
+  ld a, e
+  ld b, h
+  sla b
+  rla
+  sla b
+  rla
+  ; now a = page, and we want to set the high two bits of h to 10
+  ; to add $8000
+  set 7,h
+  res 6,h
+  ; And done
+  ret
+
+VGMHeaderWordToDEHL:
+; a = offset
+; Reads 4 bytes from the VGM header at offset a to dehl
+  ld c, a ; save for now
+
+  ; Page in the first page, remembering the current page on the stack
+  ld a,(PAGING_SLOT_2)
+  push af
+    ld a,(VGMFileStartPage)
+    ld (PAGING_SLOT_2),a
+    ld (VGMDataPage), a
+
+    ; Point hl to the start
+    ld hl, (VGMFileStartOffset)
+    
+    ; Move it forwards, safely
+    ld a, c
+    call MoveHLForwardByA
+    ; And put it in bc
+    ld b, h
+    ld c, l
   
+    ; Read it in, safely, to dehl
+    rst GetByte
+    ld l, a
+    rst GetByte
+    ld h, a
+    rst GetByte
+    ld e, a
+    rst GetByte
+    ld d, a
+  pop af
+  ld (PAGING_SLOT_2), a
+  
+  ret
+
 ;==============================================================
 ; VGM offset to SMS offset convertor
 ; Inputs:
@@ -517,29 +628,12 @@ AddBCToDEHL:
 ; hl = offset ($8000-$bfff)
 ; * If dword is zero then a will be zero to show that
 ;==============================================================
-VGMOffsetToPageAndOffset:
+VGMHeaderOffsetToPageAndPointer:
   push ix
   push bc
   push de
-    ld c, a ; save for now
-
-    ; Page in the first page, remembering the current page on the stack
-    ld a,(PAGING_SLOT_2)
-    push af
-      ld a,(VGMFileStartPage)
-      ld (PAGING_SLOT_2),a
-      
-      ; Point ix at the data
-      ld ix, (VGMFileStartOffset)
-      ld d, 0
-      ld e, c ; offset -> de
-      add ix, de
-
-      ; Value stored there -> dehl
-      ld l,(ix+0)
-      ld h,(ix+1)
-      ld e,(ix+2)
-      ld d,(ix+3)
+    push af ; save for now    
+      call VGMHeaderWordToDEHL
 
       ; See if it's zero
       ; If it is, h|l|d|e=0
@@ -548,56 +642,26 @@ VGMOffsetToPageAndOffset:
       or d
       or e
       jr z,_Zero
+    pop af
 
-      ; This is relative to the address itself, so we need to add
-      ; VGMFileStartPage * $4000 + VGMFileStartOffset - $8000 + (original parameter)
-      ; First the parameter...
-      ld b,$00
-      call AddBCToDEHL
-
-      ; Then VGMFileStartOffset
-      ld bc, (VGMFileStartOffset)
-      call AddBCToDEHL
-
-      ; This is now the ROM address + $8000 - VGMFileStartOffset * $4000
-      ; We could add these on but the code is simpler to skip it...
-
-      ; Figure out which page it's on and store that in c now
-      ; ddddddddeeeeeeeehhhhhhhhllllllll
-      ; Page -----^^^^^^^^
-      ld a, e
-      ld b, h
-      ; Shift left 2 -> a = page
-      sla b
-      rla
-      sla b
-      rla
-      push hl
-        ld hl, VGMFileStartPage
-        add a, (hl)
-        sub 2 ; for the extra $8000
-      pop hl
-      ld c,a
-
-      ; And then get the offset by modding by $4000 and adding $8000
-      ; Do this by hl = (hl & 0x3fff) | 0x8000
-      ; Quite neat in asm :P
-      res 6,h
-      set 7,h
-
-    ; Restore original page
--:  pop af
-    ld (PAGING_SLOT_2),a
+    ; This is relative to the address itself, so we need to add c
+    ; and then convert to a mapped location
+    ; First the parameter...
+    ld b,0
+    ld c, a
+    call AddBCToDEHL
+      
+    call VGMOffsetToPageAndPointer
 
     ; Output a=page number
-    ld a,c
-  pop de
+-:pop de
   pop bc
   pop ix
   ret
   
 _Zero:
-    ld c, 0
+    pop af
+    xor a
     jr -
 .ends
 
@@ -651,9 +715,21 @@ DrawGD3Tag:
   push de
   push bc
   push af
-    ; Page in first page
+    ; Init VWF
+    ld a, TileIndex_VWF_GD3
+    call InitializeVWFFontRenderer
+
+    ; Blank the tilemap area
+    ld de, TilemapAddress(0, 18)
+    rst VRAMToDE
+    ld b, 0
+    xor a
+-:  out ($be), a
+    nop
+    djnz -
+  
     ld a,$14 ; offset of GD3 tag location
-    call VGMOffsetToPageAndOffset   ; a = page or 0, hl = offset
+    call VGMHeaderOffsetToPageAndPointer   ; a = page or 0, hl = offset
 
     ; See if it's come out as zero = no tag
     or a
@@ -811,6 +887,7 @@ _hideTime:
   ld b, 8
   xor a
 -:out ($be), a
+  nop
   djnz -
   ret
 
@@ -929,21 +1006,21 @@ ProcessInput:
     jr z,_Finish            ; and don't do anything if it hasn't changed
     ld (LastButtonState),a
 
-    ; See which bits are unset = pressed
-    bit 0,a         ; Up
-    call z,NextVis
-    bit 1,a         ; Down
-    call z,VGMStop
-;    bit 2,a         ; Left
-;    call z,_Left
-    bit 3,a         ; Right
-    jr nz,+
-    ld hl,PaletteChanged
-    ld (hl),1
-+:
-    bit 4,a         ; Button 1
-    call z,VGMPlayPause
-
+    push bc
+      ; See which bits are unset = pressed
+      bit 0,a         ; Up
+      call z,NextVis
+      bit 1,a         ; Down
+      call z,VGMStop
+      bit 2,a         ; Left
+      jr nz,+
+      ld (PaletteChanged),a
++:    bit 3,a         ; Right
+      jr nz, +
+      ld (NextTrackRequested), a
++:    bit 4,a         ; Button 1
+      call z,VGMPlayPause
+    pop bc
     xor b       ; XOR a with the last value to get a 1 for each button that has changed, for hold-down buttons
     bit 5,a
     call nz,VGMFastForward  ; Button 2
@@ -1081,41 +1158,43 @@ _fail:
   pop bc
   ret
 
+VGMHeaderToMinutesSeconds:
+; a = offset
+; Returns hl = seconds, bc = minutes
+    call VGMHeaderWordToDEHL
+    ; DEHL to HLBC...
+    ld b, h
+    ld c, l
+    ld h, d
+    ld l, e
+    ld de,44100
+    call Divide16   ; hl = remainder, bc = number of seconds
+    ; round up by seeing if the remainder was >= 22050 samples
+    ld de,-22050
+    add hl,de
+    jr c,+
+    inc bc
++:  ld hl,0
+    ld de,60
+    jp Divide16   ; hl = seconds, bc = minutes
+
 ;==============================================================
 ; Initialise player/read one-time information
 ;==============================================================
 VGMInitialise:
+; bc = offset
+; (PAGING_SLOT_2) = bank
   push hl
   push af
-    ; Check for VGM marker
-    ld bc,$8000
-    call IsVGMFileAtOffset
-    jp nz,NoVGMFile
-    
     ld a, (PAGING_SLOT_2)
     ld (VGMFileStartPage), a
     ld (VGMFileStartOffset), bc
 
     ; Get lengths
-    push bc
-    pop ix
-    ld h,(ix+27)    ; Total
-    ld l,(ix+26)
-    ld b,(ix+25)
-    ld c,(ix+24)
-    ld de,44100
-    call Divide16   ; hl = remainder, bc = number of seconds
-    ; round up by seeing if the remainder was >= 22050 samples
-    scf
-    ld de,22050
-    sbc hl,de
-    jr c,+
-    inc bc
-+:  ld de, TilemapAddress(10, 9)
+    ld a, 24 ; Total
+    call VGMHeaderToMinutesSeconds
+    ld de, TilemapAddress(10, 9)
     rst VRAMToDE
-    ld hl,0
-    ld de,60
-    call Divide16   ; hl = seconds, bc = minutes
     ld a,c
     call Hex2BCD
     call WriteNumber
@@ -1125,22 +1204,8 @@ VGMInitialise:
     call Hex2BCD
     call WriteNumber
 
-    ; Lazy cut and paste
-    ld h,(ix+35)    ; Loop
-    ld l,(ix+34)
-    ld b,(ix+33)
-    ld c,(ix+32)
-    ld de,44100
-    call Divide16   ; hl = remainder, bc = number of seconds
-    scf
-    ld de,22050-1
-    sbc hl,de
-    jr c,+
-    inc bc
-    +:
-    ld hl,0
-    ld de,60
-    call Divide16   ; hl = seconds, bc = minutes
+    ld a, 32 ; Loop
+    call VGMHeaderToMinutesSeconds
     ld de, TilemapAddress(10, 10)
     rst VRAMToDE
     ld a,c
@@ -1154,26 +1219,25 @@ VGMInitialise:
     
     ; Get loop information
     ld a,$1c
-    call VGMOffsetToPageAndOffset   ; now a=page/0, hl=offset
+    call VGMHeaderOffsetToPageAndPointer   ; now a=page/0, hl=offset
     ld (VGMLoopPage),a
     ld (VGMLoopOffset),hl
 
     ; get VGM data location
     ld a,$34
-    call VGMOffsetToPageAndOffset   ; now a=page/0, hl=offset
+    call VGMHeaderOffsetToPageAndPointer   ; now a=page/0, hl=offset
     or a
     jr nz,+
-    ; defaults
-    ld a,VGMSTARTPAGE
-    ld hl,$8040
+    ; If zero, it's VGMFileStartOffset+$40
+    ; To handle that wrapping across pages, we have to page it in
+    ld a, (VGMFileStartPage)
+    ld (PAGING_SLOT_2), a
+    ld hl, (VGMFileStartOffset)
+    ld a, $40
+    call MoveHLForwardByA
+    ld a, (VGMDataPage) ; Might have changed
 +:  ld (VGMStartPage),a
     ld (VGMStartOffset),hl
-
-    ; Draw GD3 tag
-    push iy
-      ld iy,TilemapAddress(1,18) ; GD3 location
-      call DrawGD3Tag
-    pop iy
 
     ; Initialise playback speed
     ld a,(IsPalConsole)
@@ -1188,6 +1252,9 @@ _SetSpeed:
 
     ; Do multiple-time initialisations
     call _Stop
+
+    ; Draw GD3 tag
+    call DrawGD3Tag
   pop af
   pop hl
   ret
@@ -1219,6 +1286,9 @@ _Pause:
   call MuteAllSound
   ret
 
+; Stop playback
+VGMStop:
+  ; fall through to internal function
 _Stop:
   push hl
   push af
@@ -1355,11 +1425,6 @@ VGMPlayPause:
     call z,_Play
 ++:
   pop af
-  ret
-
-; Stop playback
-VGMStop:
-  jp _Stop
   ret
 
 ; Toggle 4x speed
@@ -1949,7 +2014,11 @@ InitialiseVis:    ; Per-routine initialisation
     ld e,a
     ld ix,VisRoutines
     add ix,de
-    
+
+    ; Init VWF
+    ld a, TileIndex_VWF_Vis
+    call InitializeVWFFontRenderer
+
     ld h,(ix+VisData.InitFunction+1)
     ld l,(ix+VisData.InitFunction+0)
     push ix
@@ -3406,13 +3475,12 @@ DrawLogoVis:
 -:ld a,(hl)
   out ($be),a
   dec b
-  jr z,+
+  ret z
+  nop ; VDP access timing
+  nop
   out ($be),a
   inc hl
   djnz -
-  
-+:; Done
-
   ret
 .ends
 
@@ -3466,7 +3534,7 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Background          dsb 182
+TileIndex_Background          dsb 184
 TileIndex_BigNumbers          dsb 32
 TileIndex_SmallNumbers        dsb 10
 .union ; Vis tiles shared area
@@ -3480,7 +3548,8 @@ TileIndex_SmallNumbers        dsb 10
 .nextu
   TileIndex_Sprite_Snow       dsb 4
 .endu
-TileIndex_VWF_Start           dsb 255
+TileIndex_VWF_GD3             dsb 31*4
+TileIndex_VWF_Vis             dsb 100 ; Count doesn't matter
 .ende
 
 .macro TileMapFilter
@@ -4386,6 +4455,17 @@ _buildChunkDataOffsets:
     ld d, a
     djnz -
   pop de
+  ret
+
+InitializeVWFFontRenderer:
+; a = tile index to draw from
+  ld (VWFNextUnusedTile), a
+  ld a, 4
+  ld hl, VWFTileBuffer
+  ld de, VWFTileBuffer+1
+  ld bc, _sizeof_VWFTileBuffer-1
+  ld (hl), a
+  ldir
   ret
   
 .ends
