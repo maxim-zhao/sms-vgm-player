@@ -37,4 +37,6 @@ jobs:
     - uses: actions/upload-artifact@v4
       with:
         name: rom
-        path: src/smsvgmplayer.stub
+        path: |
+            src/*.stub
+            *.py
