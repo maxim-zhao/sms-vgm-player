@@ -14,6 +14,8 @@ jobs:
     - name: get tools
       shell: pwsh
       run: |
+        pip install PIL
+        Invoke-WebRequest -Uri https://github.com/maxim-zhao/sms-build-tools/releases/download/1.0.493/tools.7z -OutFile tools.7z
         7z x tools.7z -otools
         Add-Content $env:GITHUB_PATH "$((Get-Item .\tools).FullName)"
 
