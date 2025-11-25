@@ -4,22 +4,23 @@
 ; VRAM mapping
 ; We have:
 ; $0000 +-------------------------------------------+
-;       | Background art                       184t |
-; $1700 +-------------------------------------------+
+;       | Background art                       181t |
+; $16a0 +-------------------------------------------+
 ;       | Large numbers                         32t |
-; $1800 +-------------------------------------------+
+; $1aa0 +-------------------------------------------+
 ;       | Small numbers                         10t |
-; $1c40 +----------+----------+----------+----------+
+; $1be0 +----------+----------+----------+----------+
 ;       | Snow  4t | Scale    | Piano    | Logo     |
-; $1cc0 +----------+       9t | + hands  |          |
-; $1d60            +----------+      18t |          |
-; $1e80                       +----------+      33t |
-; $2060 +--------------------------------+----------+
+; $1c60 +----------+       9t | + hands  |          |
+; $1d00            +----------+      18t |          |
+; $1e20                       +----------+      33t |
+; $2000 +--------------------------------+----------+
+; $2010 +--------------------------------+----------+
 ;       | VWF font drawing area for GD3        124t |
-; $2fe0 +---------------------+---------------------+
+; $2fa0 +---------------------+---------------------+
 ;       | VWF font drawing    |
 ; $3000 | area for vis text   +---------------------+
-;       |                     | Tilemap for VGM     |
+;       |                     | Tilemap for VGM     | <-- Must only overlap this!
 ;       |                     | logo vis        56t |
 ; $3700 |                     +---------------------+
 ;       |                 67t |
@@ -506,10 +507,8 @@ NextTrack:
     ld a, VGMSTARTPAGE
     ld (PAGING_SLOT_2), a
     ld bc, $8000
-+:  ; TODO: reset GD3 drawing area
-    ; TODO: make vis text not use GD3 tag area, so it won't get overwritten
-    ; TODO: it doesn't work!
-    call VGMInitialise
+    ; Found a file, play it
++:  call VGMInitialise
     call VGMPlayPause
   pop af
   ret
@@ -1172,7 +1171,7 @@ VGMHeaderToMinutesSeconds:
     ; round up by seeing if the remainder was >= 22050 samples
     ld de,-22050
     add hl,de
-    jr c,+
+    jr nc,+
     inc bc
 +:  ld hl,0
     ld de,60
@@ -1449,6 +1448,8 @@ VGMDoLoop:
 _NoLooping:
     ; so I'd better stop
     call _Stop
+    ld a, 1
+    ld (NextTrackRequested), a ; hack: auto-go-to-next
     jr +
 
 _IsLooping:
@@ -3534,20 +3535,21 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Background          dsb 184
+TileIndex_Background          dsb 181
 TileIndex_BigNumbers          dsb 32
 TileIndex_SmallNumbers        dsb 10
 .union ; Vis tiles shared area
   TileIndex_Scale             dsb 9   ; 0-8
 .nextu
-  TileIndex_Piano             dsb 11+1 ; To make the sprites at an even index
-  TileIndex_Sprite_BigHand    dsb 4
+  TileIndex_Piano             dsb 11
+  TileIndex_Sprite_BigHand    dsb 4   ; Must be even
   TileIndex_Sprite_SmallHand  dsb 2
 .nextu
   TileIndex_Logo              dsb 33
 .nextu
   TileIndex_Sprite_Snow       dsb 4
 .endu
+_padding db ; VWF can't draw to tile $100, could fix this but it'd be more work...
 TileIndex_VWF_GD3             dsb 31*4
 TileIndex_VWF_Vis             dsb 100 ; Count doesn't matter
 .ende
