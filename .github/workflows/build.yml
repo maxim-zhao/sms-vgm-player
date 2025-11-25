@@ -11,10 +11,19 @@ jobs:
     - name: checkout
       uses: actions/checkout@v4
 
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+        
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install pillow
+
     - name: get tools
       shell: pwsh
       run: |
-        pip install PIL
         Invoke-WebRequest -Uri https://github.com/maxim-zhao/sms-build-tools/releases/download/1.0.493/tools.7z -OutFile tools.7z
         7z x tools.7z -otools
         Add-Content $env:GITHUB_PATH "$((Get-Item .\tools).FullName)"
