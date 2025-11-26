@@ -7,12 +7,12 @@ It is only able to play back music composed for the sound chips it has: the Sega
 
 ![Screenshot](screenshots/screenshot1.png)
 
-If you have trouble with playback, try:
+Official releases can be found at https://www.smspower.org/Homebrew/SMSVGMPlayer-SMS
 
-1. For compatibility with some flash cartridges, the ROM must be padded to a multiple of 64KB.
-2. For compatibility with some emulators, the ROM must be be padded to a minimum of 64KB.
+To make a ROM, there are two approaches: doing it manually, and using an included Python script.
 
-The included `makerom.py` Python script will do all this for you. You can invoke it by:
+Creating a ROM using the Python script
+--------------------------------------
 
 1. Make sure you have Python on your computer
 2. Put `makerom.py`, `smsvgmplayer.stub` and some VGM files in the same directory
@@ -22,17 +22,25 @@ This will
 1. Make a ROM with all VGM files it finds, called `vgms.sms`
 2. If there are any M3U playlists, it will make one file for each playlist
 
-Alternatively, if you are comfortable with a commandline, you can run it as so:
+Alternatively, if you are comfortable with a command line, you can run it as so:
 
 ```
-python make_rom.py <path to M3U file>
+python makerom.py <path to M3U file>
 ```
 
 ```
-python make_rom.py <path to VGM file> <path to VGM file> <...>
+python makerom.py <path to VGM file> <path to VGM file> <...>
 ```
 
 If you need extended Unicode support for GD3 tag characters, move `smsvgmplayer.stub` away and rename `smsvgmplayer-unicode.stub` to `smsvgmplayer.stub`.
+
+
+Creating a ROM by hand
+----------------------
+
+1. If the VGM files are compressed, decompress them (GZip compression)
+2. Append them to `smsvgmplayer.stub` (or `smsvgmplayer-unicode.stub`) in the order you want them to play
+3. For best compatibility, pad to a multiple of 64KB
 
 
 Character support
@@ -40,7 +48,7 @@ Character support
 
 `smsvgmplayer.stub` includes support for the Latin alphabet (with many, but not all, accented characters), as well as Hiragana and Katakana.
 
-`smsvgmplayer-unicode.stub` includes support for over 10,000 characters including the most common Kanji, Korean, and many other scripts and symbols. Rename it to `smsvgmplayer.stub` to use the Python script.
+`smsvgmplayer-unicode.stub` includes support for over 18,000 characters including the most common Kanji, Korean, and many other scripts and symbols. Rename it to `smsvgmplayer.stub` to use the Python script.
 
 The font data comes from three sources:
 1. A [variable-width modified version](https://www.pentacom.jp/pentacom/bitfontmaker2/gallery/?id=19005) of [Amstrad PC](https://int10h.org/oldschool-pc-fonts/fontlist/font?amstrad_pc) for Latin
