@@ -4,7 +4,7 @@
 ; VRAM mapping
 ; We have:
 ; $0000 +-------------------------------------------+
-;       | Background art                       181t |
+;       | Background art                       182t |
 ; $16a0 +-------------------------------------------+
 ;       | Large numbers                         32t |
 ; $1aa0 +-------------------------------------------+
@@ -213,6 +213,7 @@ ZX0TempBuffer                   dsb 2048 ; is actually larger...
 .org $10
 .section "GetByte" force
 GetByte:
+; a = *bc++, assumes we are in page (VGMDataPage) and increments/wraps that
   ; get byte (easy)
   ld a,(bc)
   ; increment address (hard)
@@ -222,7 +223,7 @@ GetByte:
   ; bc is >$cx (presuming this is the only place it is changed)
   ; so flip to the next page
   push af
-    ld a,(VGMDataPage)
+    ld a,(PAGING_SLOT_2)
     inc a
     call z,VGMStop ; give up at page $100(!)
     ld (VGMDataPage), a
@@ -481,26 +482,22 @@ InfiniteLoop:   ; to stop the program
 .ends
 
 .section "VGM file skipper" free
-PointToNextTrack: ; TODO could inline this
-  ; If so, seek to just after it
-  ; First read the file length
-  ld a, 4 ; Look up the EOF offset
-  call VGMHeaderOffsetToPageAndPointer
-  ; Page it in
-  ld (PAGING_SLOT_2), a
-  ld (VGMFileStartPage), a
-  ld (VGMDataPage), a
-  ; Point to it
-  ld b, h 
-  ld c, l
-  ld (VGMFileStartOffset), hl
-  ld (VGMDataPointer), hl
-  ret
-
 NextTrack:
   push af
     call VGMStop
-    call PointToNextTrack
+
+    ; First read the file length
+    ld a, 4 ; Look up the EOF offset
+    call VGMHeaderOffsetToPageAndPointer
+    ; Page it in
+    ld (PAGING_SLOT_2), a
+    ld (VGMFileStartPage), a
+    ld (VGMDataPage), a
+    ; Point to it
+    ld b, h 
+    ld c, l
+    ld (VGMFileStartOffset), hl
+    ld (VGMDataPointer), hl
     call IsVGMFileAtOffset
     jr z, +
     ; No: so back to the start
@@ -600,9 +597,11 @@ VGMHeaderWordToDEHL:
     ; Move it forwards, safely
     ld a, c
     call MoveHLForwardByA
-    ; And put it in bc
+    ; And put it in bc and VGMDataPage
     ld b, h
     ld c, l
+    ld a, (PAGING_SLOT_2)
+    ld (VGMDataPage), a
   
     ; Read it in, safely, to dehl
     rst GetByte
@@ -680,9 +679,8 @@ MoveHLForwardByA:
   ; Need to decrement by $4000
   res 6,h
   ; and page in the next page
-  ld a,(VGMDataPage)
+  ld a,(PAGING_SLOT_2)
   inc a
-  ld (VGMDataPage),a
   ld (PAGING_SLOT_2), a
   
   ret
@@ -699,9 +697,8 @@ MoveHLForward:
     ; Need to decrement by $4000
     res 6, h
     ; and page in the next page
-    ld a,(VGMDataPage)
+    ld a,(PAGING_SLOT_2)
     inc a
-    ld (VGMDataPage),a
     ld (PAGING_SLOT_2), a
 +:pop af
   ret
@@ -740,9 +737,25 @@ DrawGD3Tag:
     push af
       ld a,b
       ld (PAGING_SLOT_2),a
+      ; Check for "Gd3 "
+      ld a, (hl)
+      cp 'G'
+      jr nz, _NoGD3WithPageRestore
+      call MoveHLForward
+      ld a, (hl)
+      cp 'D'
+      jr nz, _NoGD3WithPageRestore
+      call MoveHLForward
+      ld a, (hl)
+      cp '3'
+      jr nz, _NoGD3WithPageRestore
+      call MoveHLForward
+      ld a, (hl)
+      cp ' '
+      jr nz, _NoGD3WithPageRestore
 
       ; Move to first string
-      ld a,12
+      ld a,12-3
       call MoveHLForwardByA
       
       ; We prefer the English or Japanese according to the system region
@@ -756,21 +769,23 @@ DrawGD3Tag:
       call _DrawGd3StringForRegion ; Author
     pop af
     ld (PAGING_SLOT_2),a
+-:pop af
+  pop bc
+  pop de
+  pop hl
+  ret
 
-    jr _end
-
+_NoGD3WithPageRestore:
+    pop af
+    ld (PAGING_SLOT_2),a
 _NoGD3:
     ; Say so
     ld hl,NoTagString
     ld de, TilemapAddress(10, 18)
     call DrawTextASCII
+    jr -
 
 _end:
-  pop af
-  pop bc
-  pop de
-  pop hl
-  ret
 NoTagString:
 .db "- No GD3 tag -",0
 
@@ -781,7 +796,9 @@ _DrawGd3StringForRegion:
   ; - Japanese if Japanese is present and system is Japanese
   ; - The other one if the preferred language is not present
   ; We leave hl pointing after both strings in all cases
-  push hl ; preserve current pointer (to English string)
+  ld a, (PAGING_SLOT_2)
+  push af
+  push hl ; preserve current pointer (to English string) and page
     ld a, (hl)
     call MoveHLForward
     or (hl)
@@ -789,7 +806,8 @@ _DrawGd3StringForRegion:
     jr nz, +
     ; No English, use Japanese regardless of region
     call _DrawGD3String
--:pop de ; discard preserved value
+-:pop de ; discard preserved values
+  pop de
   ret
   
 +:  ; We have English, do we prefer it?
@@ -816,6 +834,8 @@ _DrawGd3StringForRegion:
     jr -
     
 +:pop hl
+  pop af
+  ld (PAGING_SLOT_2), a
   call _DrawGD3String
   jp _SkipGD3String ; and ret
   
@@ -1141,6 +1161,8 @@ Divide16:
   ret
   
 IsVGMFileAtOffset:  ; pass offset in bc, uses a, sets z if file found
+  ld a, (PAGING_SLOT_2)
+  push af
   push bc
     rst GetByte
     cp 'V'
@@ -1153,8 +1175,16 @@ IsVGMFileAtOffset:  ; pass offset in bc, uses a, sets z if file found
     jr nz,_fail
     rst GetByte
     cp ' '
+    ; TODO: check if EOF is in range, to reject excessive VGMs?
+    ; How to know what the cart size limit is?
+-:pop bc
+  pop af
+  ld (PAGING_SLOT_2), a
+  xor a ; set Z
+  ret
 _fail:
-  pop bc
+  call -
+  inc a ; clear Z
   ret
 
 VGMHeaderToMinutesSeconds:
@@ -1234,9 +1264,9 @@ VGMInitialise:
     ld hl, (VGMFileStartOffset)
     ld a, $40
     call MoveHLForwardByA
-    ld a, (VGMDataPage) ; Might have changed
-+:  ld (VGMStartPage),a
-    ld (VGMStartOffset),hl
+    ld a, (PAGING_SLOT_2) ; Might have changed
++:  ld (VGMStartPage), a
+    ld (VGMStartOffset), hl
 
     ; Initialise playback speed
     ld a,(IsPalConsole)
@@ -1251,6 +1281,11 @@ _SetSpeed:
 
     ; Do multiple-time initialisations
     call _Stop
+    
+    ; Some YM2413 VGMs don't correctly disable rhythm mode when not using it.
+    ; Let's set it to off.
+    ld de, $0e00
+    call WriteToYM2413
 
     ; Draw GD3 tag
     call DrawGD3Tag
@@ -1352,23 +1387,15 @@ MuteAllSound:
     otir
 
     ; YM2413: volumes to $f
-    ld c,$30
+    ld d,$30
     ld b,9
     ld hl,VGMYM2413Registers+$30
--:  ld a,(Port3EValue)
-    set 2,a
-    out (PORT_MEMORY_CONTROL),a
-      ld a,c
-      out ($f0),a
-      ld a,(hl)
-      and %11110000
-      or  %00001111
-      push hl
-      pop hl
-      out ($f1),a
-    ld a,(Port3EValue)
-    out (PORT_MEMORY_CONTROL),a
-    inc c
+-:  ld a, (hl)
+    and %11110000
+    or  %00001111
+    ld e, a
+    call WriteToYM2413
+    inc d
     inc hl
     djnz -
   pop hl
@@ -1385,22 +1412,13 @@ RestoreVolumes:
     ld b,4              ; how many to output
     otir
 
-    ld hl,VGMYM2413Registers+$30
-    ld c,$30
+    ld d,$30
     ld b,9
--:  ld a,(Port3EValue)
-    set 2,a
-    out (PORT_MEMORY_CONTROL),a
-      ld a,c
-      out ($f0),a
-      ld a,(hl)
-      push hl
-      pop hl ; delay
-      out ($f1),a
-    ld a,(Port3EValue)
-    out (PORT_MEMORY_CONTROL),a
+    ld hl,VGMYM2413Registers+$30
+-:  ld e, (hl)
+    call WriteToYM2413
+    inc d
     inc hl
-    inc c
     djnz -
   pop bc
   pop hl
@@ -1805,39 +1823,51 @@ EndOfFile:
     call VGMDoLoop
     jp GetData
 
+WriteToYM2413:
+; d = register, e = value
+  ld a, (Port3EValue)
+  set 2, a
+  out (PORT_MEMORY_CONTROL), a
+
+  ld a, d
+  out ($f0), a
+
+  ; Wait 12 cycles before another value
+  ld a, e
+  out ($f1),a
+  
+  ; 84 cycles needed after a data write, but there's more than that
+  ; even of this is called consecutively.
+
+  ld a, (Port3EValue) 
+  out (PORT_MEMORY_CONTROL), a
+  ret
+
 YM2413:
-    ld a,(Port3EValue)
-    set 2,a
-    out (PORT_MEMORY_CONTROL),a
-
     rst GetByte
-    out ($f0),a
-    ld e,a      ; e = register
-
-    rst GetByte ; Delay needed? It seems we are slow enough...
-    out ($f1),a
-    ld d,a      ; d = data
-    ld a,(Port3EValue)
-    out (PORT_MEMORY_CONTROL),a
+    ld d, a
+    rst GetByte
+    ld e, a
+    call WriteToYM2413
     
     ; Store the value
-    ld a,e
+    ld a,d
     cp $39
     jp nc,GetData
     push hl
     push bc
-      ld b,d
-      ld d,0
+      ld b,0
+      ld c,d
       ld hl,VGMYM2413Registers
-      add hl,de
-      ld (hl),b
+      add hl,bc
+      ld (hl),e
 
       ; If a YM2413 key down is seen, we want to enable FM.
       ; We only do it here because some VGMs may have FM initialisation, but enabling FM would mute PSG on a Mark III.
       and $f0
       cp $20
       jp nz,+
-      ld a,b
+      ld a,e
       or %00010000
       jr z,+
       ld a,(FMChipEnabled)
@@ -1949,6 +1979,8 @@ EndGetDataLoop:
 .section "No VGM file" free
 NoVGMFile:
     ; Display a message
+    ld a, TileIndex_VWF_GD3
+    call InitializeVWFFontRenderer
     ld hl,NoVGMText
     ld de,TilemapAddress(11,17)
     call DrawTextASCII
@@ -3112,7 +3144,7 @@ SmoothingCounter db
 .define MaxX 256-63
 .define MinY 0
 .define MaxY 192-32
-.define BaseLogoSpeed $80
+.define BaseLogoSpeed $40
 
 LogoPalettes:
 .db colour(1,0,1), colour(2,0,2), colour(3,0,3)
@@ -3535,13 +3567,14 @@ Palettes:
 .db colour(3,0,0),colour(3,2,2),colour(3,2,3)  ; bright red
 
 .enum 0 export ; Tile indices
-TileIndex_Background          dsb 181
+TileIndex_Background          dsb 182
 TileIndex_BigNumbers          dsb 32
 TileIndex_SmallNumbers        dsb 10
 .union ; Vis tiles shared area
   TileIndex_Scale             dsb 9   ; 0-8
 .nextu
   TileIndex_Piano             dsb 11
+  padding db
   TileIndex_Sprite_BigHand    dsb 4   ; Must be even
   TileIndex_Sprite_SmallHand  dsb 2
 .nextu
@@ -4121,6 +4154,7 @@ DrawTextASCII:
   ; de = VRAM address of first tile
   ; First save the tilemap address
   ld (VWFTilemapAddress), de
+  ld a, 255
   ld (VWFTileCount), a ; not limiting...
   ; Draw text by converting to Unicode...
 -:ld a, (hl)

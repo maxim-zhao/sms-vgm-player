@@ -61,6 +61,16 @@ There is no emoji support.
 History
 -------
 
+- Version (unreleased)
+  - Added sanity checks to avoid hanging on drawing the GD3 from a truncated file. Note that things will still go wrong when a ROM is truncated.
+  - Fixed a bug that meant the "no VGM file" and "no GD3 tag" messages were cut off
+  - Made the `~` character display in a way more suited to GD3 tags
+
+- Version 2.2.1
+  - Fix for large VGMs not playing properly
+  - Fix for hangs when a GD3 tag crosses a 16KB boundary
+  - Added a mitigation for VGMs that fail to disable YM2413 rhythm mode
+
 - Version 2.2
   - Added support for multiple VGM files - assuming they have a valid EOF offset
     - Non-looping files will automatically advance, looping ones will still loop forever
