@@ -743,7 +743,7 @@ DrawGD3Tag:
       jr nz, _NoGD3WithPageRestore
       call MoveHLForward
       ld a, (hl)
-      cp 'D'
+      cp 'd'
       jr nz, _NoGD3WithPageRestore
       call MoveHLForward
       ld a, (hl)
