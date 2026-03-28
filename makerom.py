@@ -42,8 +42,9 @@ def make_rom_from_vgms(output_filename, filenames):
         with open("smsvgmplayer.stub", "rb") as stub:
             output.write(stub.read())
         # Copy the VGM
-        isGzip = False
         for filename in filenames:
+            print(f"- {filename}")
+            isGzip = False
             with open(filename, "rb") as vgm:
                 # Check for gzip
                 if vgm.read(2) == b'\x1f\x8b':

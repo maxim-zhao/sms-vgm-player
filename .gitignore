@@ -17,3 +17,4 @@ auto*.makefile
 *.zx0
 chunk*.png
 /src/fonts/font*.asm
+*.vgz
