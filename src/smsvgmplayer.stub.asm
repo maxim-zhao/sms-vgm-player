@@ -589,7 +589,6 @@ VGMHeaderWordToDEHL:
   push af
     ld a,(VGMFileStartPage)
     ld (PAGING_SLOT_2),a
-    ld (VGMDataPage), a
 
     ; Point hl to the start
     ld hl, (VGMFileStartOffset)
@@ -597,11 +596,10 @@ VGMHeaderWordToDEHL:
     ; Move it forwards, safely
     ld a, c
     call MoveHLForwardByA
-    ; And put it in bc and VGMDataPage
+    ; And put it in bc
     ld b, h
     ld c, l
     ld a, (PAGING_SLOT_2)
-    ld (VGMDataPage), a
   
     ; Read it in, safely, to dehl
     rst GetByte
