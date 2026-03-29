@@ -61,10 +61,13 @@ There is no emoji support.
 History
 -------
 
-- Version (unreleased)
+- Version 2.3
   - Added sanity checks to avoid hanging on drawing the GD3 from a truncated file. Note that things will still go wrong when a ROM is truncated.
   - Fixed a bug that meant the "no VGM file" and "no GD3 tag" messages were cut off
   - Made the `~` character display in a way more suited to GD3 tags
+  - Fixed a bug when a VGM file's header overlaps the end of a ROM bank
+  - Fixed a bug in makerom.py when there is a mix of compressed and uncompressed files
+  - Fixed a bug when seeking back to the first track
 
 - Version 2.2.1
   - Fix for large VGMs not playing properly
