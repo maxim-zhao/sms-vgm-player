@@ -1183,7 +1183,9 @@ IsVGMFileAtOffset:  ; pass offset in bc, uses a, sets z if file found
   xor a ; set Z
   ret
 _fail:
-  call -
+  pop bc
+  pop af
+  ld (PAGING_SLOT_2), a
   inc a ; clear Z
   ret
 
